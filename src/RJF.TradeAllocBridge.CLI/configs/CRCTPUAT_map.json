@@ -1,0 +1,30 @@
+{
+  "clientId": "CRCTPUAT",
+  "senderDomain": "hotmail.com",
+  "delimiter": ";",
+  "predefined": {
+    "49": "CRCTPUAT",
+    "56": "RJSYNUAT"
+  },
+  "tradeAllocations": {
+    "TRADE DATE": "75",
+    "SIDE": "54",
+    "SYMBOL": "55",
+    "CUSIP": "48",
+    "ISIN": "48",
+    "SEDOL": "48",
+    "ALLOC ACCOUNT": "79",
+    "QUANTITY": "80",
+    "PRICE": "153"
+  },
+  "repeatingGroups": {
+    "NoOrders": {
+      "11": "ORDER ID"
+    },
+    "NoAllocs": {
+      "79": "ALLOC ACCOUNT",
+      "80": "QUANTITY",
+      "153": "PRICE"
+    }
+  }
+}
