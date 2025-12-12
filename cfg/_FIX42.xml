@@ -1,0 +1,154 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<fix major="4" minor="2">
+  <header>
+    <field name="BeginString" required="Y"/>
+    <field name="BodyLength" required="Y"/>
+    <field name="MsgType" required="Y"/>
+    <field name="SenderCompID" required="Y"/>
+    <field name="TargetCompID" required="Y"/>
+    <field name="MsgSeqNum" required="Y"/>
+    <field name="SendingTime" required="Y"/>
+  </header>
+
+  <trailer>
+    <field name="CheckSum" required="Y"/>
+  </trailer>
+
+  <messages>
+    <message name="Heartbeat" msgtype="0" msgcat="admin">
+      <field name="TestReqID" required="N"/>
+    </message>
+    <message name="TestRequest" msgtype="1" msgcat="admin">
+      <field name="TestReqID" required="Y"/>
+    </message>
+    <message name="ResendRequest" msgtype="2" msgcat="admin">
+      <field name="BeginSeqNo" required="Y"/>
+      <field name="EndSeqNo" required="Y"/>
+    </message>
+    <message name="Reject" msgtype="3" msgcat="admin">
+      <field name="RefSeqNum" required="Y"/>
+      <field name="Text" required="N"/>
+    </message>
+    <message name="SequenceReset" msgtype="4" msgcat="admin">
+      <field name="GapFillFlag" required="N"/>
+      <field name="NewSeqNo" required="Y"/>
+    </message>
+    <message name="Logout" msgtype="5" msgcat="admin">
+      <field name="Text" required="N"/>
+    </message>
+    <message name="Logon" msgtype="A" msgcat="admin">
+      <field name="EncryptMethod" required="Y"/>
+      <field name="HeartBtInt" required="Y"/>
+      <field name="ResetSeqNumFlag" required="N"/>
+    </message>
+    <message name="Allocation" msgtype="J" msgcat="app">
+      <field name="AllocID" required="Y"/>
+      <field name="AllocTransType" required="Y"/>
+      <field name="RefAllocID" required="N"/>
+      <field name="TradeDate" required="Y"/>
+      <field name="Side" required="Y"/>
+      <field name="Symbol" required="N"/>
+      <field name="SecurityID" required="N"/>
+      <field name="IDSource" required="N"/>
+      <field name="Shares" required="N"/>
+      <field name="AvgPx" required="N"/>
+
+      <!-- 🧩 Repeating group for each allocation -->
+      <group name="NoAllocs" required="N" num_in_group="78">
+        <field name="AllocAccount" required="N"/>
+        <field name="AllocShares" required="N"/>
+        <field name="AllocAvgPx" required="N"/>
+      </group>
+
+      <!-- optional order group if needed -->
+      <group name="NoOrders" required="N" num_in_group="73">
+        <field name="ClOrdID" required="N"/>
+      </group>
+    </message>
+
+  </messages>
+
+  <fields>
+    <field number="6" name="AvgPx" type="PRICE"/>
+    <field number="7" name="BeginSeqNo" type="SEQNUM"/>
+    <field number="8" name="BeginString" type="STRING"/>
+    <field number="9" name="BodyLength" type="LENGTH"/>
+    <field number="10" name="CheckSum" type="STRING"/>
+    <field number="11" name="ClOrdID" type="STRING"/>
+    <field number="16" name="EndSeqNo" type="SEQNUM"/>
+    <field number="22" name="IDSource" type="STRING">
+      <value enum="1" description="CUSIP"/>
+      <value enum="2" description="SEDOL"/>
+      <value enum="3" description="QUIK"/>
+      <value enum="4" description="ISIN_NUMBER"/>
+      <value enum="5" description="RIC_CODE"/>
+      <value enum="6" description="ISO_CURRENCY_CODE"/>
+      <value enum="7" description="ISO_COUNTRY_CODE"/>
+      <value enum="8" description="EXCHANGE_SYMBOL"/>
+      <value enum="9" description="CONSOLIDATED_TAPE_ASSOCIATION"/>
+    </field>
+    <field number="34" name="MsgSeqNum" type="SEQNUM"/>
+    <field number="35" name="MsgType" type="STRING">
+      <value enum="0" description="HEARTBEAT"/>
+      <value enum="1" description="TEST_REQUEST"/>
+      <value enum="2" description="RESEND_REQUEST"/>
+      <value enum="3" description="REJECT"/>
+      <value enum="4" description="SEQUENCE_RESET"/>
+      <value enum="5" description="LOGOUT"/>
+      <value enum="A" description="LOGON"/>
+      <value enum="J" description="ALLOCATION"/>
+    </field>
+    <field number="36" name="NewSeqNo" type="SEQNUM"/>
+    <field number="38" name="OrderQty" type="QTY"/>
+    <field number="45" name="RefSeqNum" type="SEQNUM"/>
+    <field number="48" name="SecurityID" type="STRING"/>
+    <field number="49" name="SenderCompID" type="STRING"/>
+    <field number="52" name="SendingTime" type="UTCTIMESTAMP"/>
+    <field number="53" name="Shares" type="QTY"/>
+    <field number="54" name="Side" type="CHAR">
+      <value enum="1" description="BUY"/>
+      <value enum="2" description="SELL"/>
+      <value enum="3" description="BUY_MINUS"/>
+      <value enum="4" description="SELL_PLUS"/>
+      <value enum="5" description="SELL_SHORT"/>
+      <value enum="6" description="SELL_SHORT_EXEMPT"/>
+      <value enum="7" description="UNDISCLOSED"/>
+      <value enum="8" description="CROSS"/>
+      <value enum="9" description="CROSS_SHORT"/>
+    </field>
+    <field number="55" name="Symbol" type="STRING"/>
+    <field number="56" name="TargetCompID" type="STRING"/>
+    <field number="58" name="Text" type="STRING"/>
+    <field number="70" name="AllocID" type="STRING"/>
+    <field number="71" name="AllocTransType" type="CHAR">
+      <value enum="0" description="NEW"/>
+      <value enum="1" description="REPLACE"/>
+      <value enum="2" description="CANCEL"/>
+    </field>
+    <field number="72" name="RefAllocID" type="STRING"/>
+    <field number="73" name="NoOrders" type="INT"/>
+    <field number="75" name="TradeDate" type="LOCALMKTDATE"/>
+    <field number="78" name="NoAllocs" type="INT"/>
+    <field number="79" name="AllocAccount" type="STRING"/>
+    <field number="80" name="AllocShares" type="QTY"/>
+    <field number="98" name="EncryptMethod" type="INT">
+      <value enum="0" description="NONE"/>
+    </field>
+    <field number="108" name="HeartBtInt" type="INT"/>
+    <field number="112" name="TestReqID" type="STRING"/>
+    <field number="123" name="GapFillFlag" type="BOOLEAN">
+      <value enum="Y" description="GAP_FILL_MESSAGE"/>
+      <value enum="N" description="SEQUENCE_RESET_IGNORE_MSG_SEQ_NUM"/>
+    </field>
+    <field number="141" name="ResetSeqNumFlag" type="BOOLEAN">
+      <value enum="Y" description="YES"/>
+      <value enum="N" description="NO"/>
+    </field>
+    <field number="153" name="AllocAvgPx" type="PRICE"/>
+    <field number="196" name="AllocLinkID" type="STRING"/>
+    <field number="197" name="AllocLinkType" type="INT">
+      <value enum="0" description="FX_NETTING"/>
+      <value enum="1" description="FX_SWAP"/>
+    </field>
+  </fields>
+</fix>

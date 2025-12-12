@@ -1,0 +1,47 @@
+{
+  "Email": {
+    "Provider": "GraphAPI",
+    "TenantId": "d9ec922c-c726-4487-9cee-dd30175e4747",
+    "ClientId": "5f31ec8e-d355-4235-a1af-968ba6347fad",
+    "ClientSecret": "QbY8Q~MKbSFmlkXAbIQemRvoyvwMrx7fsPOb-aeW",
+    "MailboxAddress": "rjf@7mcchy.onmicrosoft.com",
+    "PollIntervalSeconds": 60
+  },
+  "Fix": {
+    "Version": "4.2",
+    "Host": "fix.broadridge.net",
+    "Port": 9876,
+    "SenderCompID": "TRADEALLOC",
+    "TargetCompID": "BROKER",
+    "HeartBtInt": 30
+  },
+  "Mapping": {
+    "TradeAllocations": {
+      "BROKER": "76",
+      "BROKER EMAIL": "360",
+      "RIC": "55",
+      "DESCRIPTION": "115",
+      "CUSIP": "48",
+      "CCY": "15",
+      "ISIN": "48",
+      "SEDOL": "48",
+      "TRADE DATE": "75",
+      "ORDER": "54",
+      "PRICE": "31",
+      "COMMISH": "12",
+      "TYPE": "13",
+      "TOTAL COMMISSION": "12",
+      "NET SETTLMENT AMOUNT": "120",
+      "TOTAL ACCRUED": "159",
+      "TOTAL FEES": "89",
+      "CUSTODIAN ID": "79",
+      "ACCOUNT": "1",
+      "QUANTITY": "53"
+    }
+  },
+  "Logging": {
+    "LogLevel": {
+      "Default": "Debug"
+    }
+  }
+}
