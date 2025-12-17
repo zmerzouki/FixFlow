@@ -172,7 +172,7 @@ public class FixMessageBuilder
 
     // ------------------ NoOrders group ------------------
     var orderGroup = new Group(73, 11);
-    orderGroup.SetField(new StringField(11, $"AUTO-{allocId}"));
+    orderGroup.SetField(new StringField(11, $"ORDER-{allocId}"));
     msg.SetField(new IntField(73, 1));
     msg.AddGroup(orderGroup);
 

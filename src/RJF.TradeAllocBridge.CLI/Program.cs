@@ -120,7 +120,7 @@ namespace RJF.TradeAllocBridge.CLI
                             MapPath = mapPath,
                             Attachments = new List<string>
                             {
-                                Path.Combine(AppContext.BaseDirectory, "Allocations_Multiple.xlsx")
+                                Path.Combine(AppContext.BaseDirectory, "Allocations_Multiple.csv")
                             }
                         }
                     };
@@ -203,69 +203,75 @@ namespace RJF.TradeAllocBridge.CLI
 
                         Console.WriteLine($"Processing file: {Path.GetFileName(attachmentPath)}");
                         var trades = excelParser.Parse(attachmentPath);
+                        
+// -------------------------------------------------------------------
+// ✅ Group allocations by Symbol (tag 55)
+// -------------------------------------------------------------------
+var symbolColumn = mapping.TradeAllocations
+    .FirstOrDefault(kvp => kvp.Value == "55").Key ?? "SYMBOL";
 
-                        var groupedAllocations = trades
-                            .GroupBy(t =>
-                            {
-                                var row = t.Fields;
-                                var (secId, idSrc) = FixValueNormalizer.GetSecurityIdAndSource(row);
-                                string side = FixValueNormalizer.Normalize(Tags.Side, row.GetValueOrDefault("SIDE") ?? "BUY", row);
-                                string tradeDate = FixValueNormalizer.Normalize(Tags.TradeDate, row.GetValueOrDefault("TRADE DATE") ?? "", row);
-                                return (secId, idSrc, side, tradeDate);
-                            })
-                            .ToList();
+var groupedBySymbol = trades
+    .GroupBy(t => t.Fields.GetValueOrDefault(symbolColumn, "UNKNOWN").Trim())
+    .ToList();
 
-                        Console.WriteLine($"📊 Found {groupedAllocations.Count} trade group(s).");
+Console.WriteLine($"📊 Found {groupedBySymbol.Count} trade group(s) by symbol.");
 
-                        foreach (var tradeGroup in groupedAllocations)
-                        {
-                            var allocId = $"{fixBuilder.NextAllocId()}-{DateTime.Now:yyyyMMdd}";
-                            string senderComp = mapping.Predefined?.SenderCompID ?? mapping.ClientId ?? "TRADEALLOC";
-                            string targetComp = mapping.Predefined?.TargetCompID ?? "EXECUTOR";
+// -------------------------------------------------------------------
+// ✅ Build and send one AllocationInstruction (35=J) per symbol
+// -------------------------------------------------------------------
+foreach (var symbolGroup in groupedBySymbol)
+{
+    string symbol = symbolGroup.Key;
+    var allocId = $"{fixBuilder.NextAllocId()}-{DateTime.UtcNow:yyyyMMdd}";
+    string senderComp = mapping.Predefined?.SenderCompID ?? mapping.ClientId ?? "TRADEALLOC";
+    string targetComp = mapping.Predefined?.TargetCompID ?? "EXECUTOR";
 
-                            var mergedMsg = fixBuilder.BuildFromAllocGroup(allocId, senderComp, targetComp, tradeGroup.ToList());
+    var mergedMsg = fixBuilder.BuildFromAllocGroup(allocId, senderComp, targetComp, symbolGroup, mapping);
 
-                            // Retrieve the correct session ID from the FIX engine
-                            SessionID? sessionID = null;
-                            foreach (var sid in fixEngine.SessionSettings.GetSessions())
-                            {
-                                if (sid.SenderCompID.Equals(senderComp, StringComparison.OrdinalIgnoreCase))
-                                {
-                                    sessionID = sid;
-                                    break;
-                                }
-                            }
+    // Retrieve the correct session ID from the FIX engine
+    SessionID? sessionID = null;
+    if (fixEngine.SessionSettings != null)
+    {
+        foreach (var sid in fixEngine.SessionSettings.GetSessions())
+        {
+            if (string.Equals(sid.SenderCompID, senderComp, StringComparison.OrdinalIgnoreCase))
+            {
+                sessionID = sid;
+                break;
+            }
+        }
+    }
 
-                            if (sessionID is null)
-                            {
-                                Console.WriteLine($"⚠️ No FIX session found for SenderCompID={senderComp}. Skipping.");
-                                continue;
-                            }
+    if (sessionID is null)
+    {
+        Console.WriteLine($"⚠️ No FIX session found for SenderCompID={senderComp}. Skipping.");
+        continue;
+    }
 
-                            var nonNullSession = sessionID; // local alias
-                            var sendResult = dryRun ? "OK" : await fixClient.SendAsync(mergedMsg, nonNullSession);
+    var nonNullSession = sessionID; // local alias
+    var sendResult = dryRun ? "OK" : await fixClient.SendAsync(mergedMsg, nonNullSession);
+    string status = sendResult == "OK" ? "OK" : "FAILED";
 
+    Console.WriteLine($"AllocID={allocId} ({symbol}) → {status}");
+    fixBuilderLogger.LogInformation(
+        "✅ Sent merged allocation {AllocId} for {Symbol} ({Count} trades): {Status}",
+        allocId, symbol, symbolGroup.Count(), status);
 
-                            string status = sendResult == "OK" ? "OK" : "FAILED";
+    string rawFix = mergedMsg.ToString().Replace('\u0001', '|').Replace("\r", "").Replace("\n", "");
+    report.Add(new ValidationResult(
+        DateTime.Now.ToString("o"),
+        string.Join(",", symbolGroup.Select(t => t.Id)),
+        allocId,
+        symbol,
+        mergedMsg.IsSetField(80) ? mergedMsg.GetString(80) : "",
+        mergedMsg.IsSetField(153) ? mergedMsg.GetString(153) : "",
+        mergedMsg.IsSetField(79) ? mergedMsg.GetString(79) : "",
+        status,
+        status == "OK" ? "" : sendResult,
+        rawFix
+    ));
+}
 
-                            Console.WriteLine($"AllocID={allocId} → {status}");
-                            fixBuilderLogger.LogInformation("✅ Sent merged allocation {AllocId} ({Count} trades): {Status}",
-                                allocId, tradeGroup.Count(), status);
-
-                            string rawFix = mergedMsg.ToString().Replace('\u0001', '|').Replace("\r", "").Replace("\n", "");
-                            report.Add(new ValidationResult(
-                                DateTime.Now.ToString("o"),
-                                string.Join(",", tradeGroup.Select(t => t.Id)),
-                                allocId,
-                                mergedMsg.IsSetField(55) ? mergedMsg.GetString(55) : "",
-                                mergedMsg.IsSetField(80) ? mergedMsg.GetString(80) : "",
-                                mergedMsg.IsSetField(153) ? mergedMsg.GetString(153) : "",
-                                mergedMsg.IsSetField(79) ? mergedMsg.GetString(79) : "",
-                                status,
-                                status == "OK" ? "" : sendResult,
-                                rawFix
-                            ));
-                        }
                     }
                 }
 
