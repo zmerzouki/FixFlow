@@ -3,6 +3,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Graph.Models;
+using QuickFix;
 using QuickFix.Fields;
 using RJF.TradeAllocBridge.Core.Config;
 using RJF.TradeAllocBridge.Core.Email;
@@ -12,6 +13,9 @@ using RJF.TradeAllocBridge.Core.Logging;
 using RJF.TradeAllocBridge.Core.Mapping;
 using RJF.TradeAllocBridge.Core.Reporting;
 using Serilog;
+using System.Runtime.Versioning;
+
+[assembly: SupportedOSPlatform("windows7.0")]
 
 namespace RJF.TradeAllocBridge.CLI
 {
@@ -19,12 +23,12 @@ namespace RJF.TradeAllocBridge.CLI
     {
         public static async Task<int> Main(string[] args)
         {
-            Console.Title = "RJF.TradeAllocBridge CLI";
+            Console.Title = "TradeAllocBridge CLI";
 
             if (args.Length == 0 || args[0].Equals("help", StringComparison.OrdinalIgnoreCase))
             {
                 Console.WriteLine("Usage:");
-                Console.WriteLine("  RJF.TradeAllocBridge process-now [--dry-run]");
+                Console.WriteLine("  TradeAllocBridge process-now [--dry-run]");
                 Console.WriteLine();
                 Console.WriteLine("Description:");
                 Console.WriteLine("  Processes mailbox allocations, builds FIX 4.2 messages, and optionally sends them.");
@@ -64,17 +68,14 @@ namespace RJF.TradeAllocBridge.CLI
                 var fixApp = app.Services.GetRequiredService<FixApp>();
                 fixApp.Engine = fixEngine;
 
-                if (!dryRun)
-                    fixEngine.Start();
-
                 Console.WriteLine("===> FIX XML Group Definition Present? " +
                     File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "cfg", "FIX42.xml"))
                         .Contains("NoAllocs"));
-                
-                // ✅ Diagnostic: Manually test if FIX42.xml loads correctly
+
+                // ✅ Manual verification of dictionary load
                 try
                 {
-                    var dictPath = Path.Combine(AppContext.BaseDirectory, "cfg", "FIX42.xml");
+                    var dictPath = "C://Fix//FIX42.xml";
                     var dd = new QuickFix.DataDictionary.DataDictionary(dictPath);
                     Console.WriteLine($"✅ Dictionary loaded successfully: {dictPath}");
                     Console.WriteLine($"   Fields: {dd.FieldsByTag.Count}, Messages: {dd.Messages.Count}");
@@ -88,7 +89,9 @@ namespace RJF.TradeAllocBridge.CLI
                     ? "Running in DRY-RUN (validation-only) mode — no messages will be sent."
                     : "Starting manual trade allocation processing...");
 
+                // -------------------------------------------------------------------
                 // Fetch emails or use local test data
+                // -------------------------------------------------------------------
                 List<AllocationEmail> emails;
                 if (dryRun)
                 {
@@ -105,7 +108,7 @@ namespace RJF.TradeAllocBridge.CLI
                     configDir = probePaths.FirstOrDefault(Directory.Exists)
                                 ?? Path.Combine(AppContext.BaseDirectory, "configs");
 
-                    var mapPath = Path.Combine(configDir, "RAYMONDJAMES_map.json");
+                    var mapPath = Path.Combine(configDir, "RAJA_map.json");
 
                     emails = new List<AllocationEmail>
                     {
@@ -113,11 +116,11 @@ namespace RJF.TradeAllocBridge.CLI
                         {
                             Subject = "Local Test Allocation",
                             SenderEmail = "test@rjf.local",
-                            ClientId = "RAYMONDJAMES",
+                            ClientId = "RAJA",
                             MapPath = mapPath,
                             Attachments = new List<string>
                             {
-                                Path.Combine(AppContext.BaseDirectory, "Allocations_RAYMONDJAMES_20251204.xlsx")
+                                Path.Combine(AppContext.BaseDirectory, "Allocations_Multiple.xlsx")
                             }
                         }
                     };
@@ -128,7 +131,11 @@ namespace RJF.TradeAllocBridge.CLI
                     Console.WriteLine($"Fetched {emails.Count} email(s) with attachments.");
                 }
 
-                // Process each email
+                // -------------------------------------------------------------------
+                // ✅ Dynamic FIX Session Configuration (from all mappings)
+                // -------------------------------------------------------------------
+                var allMappings = new List<(string Sender, string Target)>();
+
                 foreach (var email in emails)
                 {
                     if (string.IsNullOrEmpty(email.MapPath) || !File.Exists(email.MapPath))
@@ -136,6 +143,40 @@ namespace RJF.TradeAllocBridge.CLI
                         Console.WriteLine($"⚠️ No mapping found for client {email.ClientId} (sender {email.SenderEmail}). Skipping.");
                         continue;
                     }
+
+                    try
+                    {
+                        var mapping = MappingConfig.Load(email.MapPath);
+                        string senderComp = mapping.Predefined?.SenderCompID ?? mapping.ClientId ?? "DEFAULTSENDER";
+                        string targetComp = mapping.Predefined?.TargetCompID ?? "RJSYNUAT";
+                        allMappings.Add((senderComp, targetComp));
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"❌ Failed to load mapping file {email.MapPath}: {ex.Message}");
+                    }
+                }
+
+                if (allMappings.Count > 0)
+                {
+                    fixEngine.AppendSessionsIfMissing(allMappings);
+                    fixEngine.ReloadSettings(fixApp);
+
+                    if (!dryRun)
+                        fixEngine.Start();
+                }
+                else
+                {
+                    Console.WriteLine("⚠️ No valid mappings found — skipping FIX session initialization.");
+                }
+
+                // -------------------------------------------------------------------
+                // Process emails (main allocation loop)
+                // -------------------------------------------------------------------
+                foreach (var email in emails)
+                {
+                    if (string.IsNullOrEmpty(email.MapPath) || !File.Exists(email.MapPath))
+                        continue;
 
                     MappingConfig mapping;
                     try
@@ -163,7 +204,6 @@ namespace RJF.TradeAllocBridge.CLI
                         Console.WriteLine($"Processing file: {Path.GetFileName(attachmentPath)}");
                         var trades = excelParser.Parse(attachmentPath);
 
-                        // Group trades by Security, Side, and TradeDate
                         var groupedAllocations = trades
                             .GroupBy(t =>
                             {
@@ -180,20 +220,38 @@ namespace RJF.TradeAllocBridge.CLI
                         foreach (var tradeGroup in groupedAllocations)
                         {
                             var allocId = $"{fixBuilder.NextAllocId()}-{DateTime.Now:yyyyMMdd}";
-
                             string senderComp = mapping.Predefined?.SenderCompID ?? mapping.ClientId ?? "TRADEALLOC";
                             string targetComp = mapping.Predefined?.TargetCompID ?? "EXECUTOR";
 
-                            // ✅ Build only one merged message per group
                             var mergedMsg = fixBuilder.BuildFromAllocGroup(allocId, senderComp, targetComp, tradeGroup.ToList());
-                            var sendResult = dryRun ? "OK" : await fixClient.SendAsync(mergedMsg);
+
+                            // Retrieve the correct session ID from the FIX engine
+                            SessionID? sessionID = null;
+                            foreach (var sid in fixEngine.SessionSettings.GetSessions())
+                            {
+                                if (sid.SenderCompID.Equals(senderComp, StringComparison.OrdinalIgnoreCase))
+                                {
+                                    sessionID = sid;
+                                    break;
+                                }
+                            }
+
+                            if (sessionID is null)
+                            {
+                                Console.WriteLine($"⚠️ No FIX session found for SenderCompID={senderComp}. Skipping.");
+                                continue;
+                            }
+
+                            var nonNullSession = sessionID; // local alias
+                            var sendResult = dryRun ? "OK" : await fixClient.SendAsync(mergedMsg, nonNullSession);
+
+
                             string status = sendResult == "OK" ? "OK" : "FAILED";
 
                             Console.WriteLine($"AllocID={allocId} → {status}");
                             fixBuilderLogger.LogInformation("✅ Sent merged allocation {AllocId} ({Count} trades): {Status}",
                                 allocId, tradeGroup.Count(), status);
 
-                            // Add merged allocation record to report
                             string rawFix = mergedMsg.ToString().Replace('\u0001', '|').Replace("\r", "").Replace("\n", "");
                             report.Add(new ValidationResult(
                                 DateTime.Now.ToString("o"),
@@ -211,6 +269,9 @@ namespace RJF.TradeAllocBridge.CLI
                     }
                 }
 
+                // -------------------------------------------------------------------
+                // Wrap up
+                // -------------------------------------------------------------------
                 report.Save();
                 Console.WriteLine("Processing complete.");
 
@@ -225,7 +286,7 @@ namespace RJF.TradeAllocBridge.CLI
             catch (Exception ex)
             {
                 Console.Error.WriteLine($"Fatal error: {ex.Message}");
-                Log.Error(ex, "Unhandled exception in RJF.TradeAllocBridge CLI");
+                Log.Error(ex, "Unhandled exception in TradeAllocBridge CLI");
                 return -1;
             }
         }

@@ -8,8 +8,7 @@ namespace RJF.TradeAllocBridge.Core.Config
 {
     /// <summary>
     /// Represents a single client's FIX mapping configuration.
-    /// Supports flat tag mappings, predefined FIX header fields,
-    /// and optional repeating group definitions.
+    /// Supports flat tag mappings and predefined FIX header fields.
     /// </summary>
     public class MappingConfig
     {
@@ -45,17 +44,6 @@ namespace RJF.TradeAllocBridge.Core.Config
         [JsonPropertyName("predefined")]
         public PredefinedFields? Predefined { get; set; }
 
-        /// <summary>
-        /// Optional repeating group definitions.
-        /// Example:
-        /// {
-        ///   "NoOrders": { "11": "ClOrdID" },
-        ///   "NoAllocs": { "79": "AllocAccount", "80": "AllocQty", "153": "AllocAvgPx" }
-        /// }
-        /// </summary>
-        [JsonPropertyName("repeatingGroups")]
-        public Dictionary<string, Dictionary<string, string>>? RepeatingGroups { get; set; }
-
         // Cache the JsonSerializerOptions instance
         private static readonly JsonSerializerOptions CachedJsonOptions = new()
         {
@@ -81,7 +69,6 @@ namespace RJF.TradeAllocBridge.Core.Config
                 config.Delimiter = ";";
 
             config.TradeAllocations ??= new(StringComparer.OrdinalIgnoreCase);
-            config.RepeatingGroups ??= new Dictionary<string, Dictionary<string, string>>(StringComparer.OrdinalIgnoreCase);
 
             return config;
         }

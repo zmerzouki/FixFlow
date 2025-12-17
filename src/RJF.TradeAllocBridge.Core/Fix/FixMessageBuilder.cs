@@ -110,92 +110,105 @@ public class FixMessageBuilder
         return msg;
     }
 
-    public Message BuildFromAllocGroup(string allocId, string senderComp, string targetComp, IEnumerable<TradeRecord> trades)
+    public Message BuildFromAllocGroup(
+    string allocId,
+    string senderComp,
+    string targetComp,
+    IEnumerable<TradeRecord> trades,
+    MappingConfig mapping)
+{
+    if (trades == null || !trades.Any())
+        throw new ArgumentException("No trades provided to build allocation group.");
+
+    var msg = new Message();
+    msg.Header.SetField(new BeginString("FIX.4.2"));
+    msg.Header.SetField(new MsgType("J"));
+    msg.Header.SetField(new SenderCompID(senderComp));
+    msg.Header.SetField(new TargetCompID(targetComp));
+
+    // 🔹 Lookup tag-to-column mappings (reverse lookup: tag -> column name)
+    string? GetColumn(int tag) => mapping.TradeAllocations
+        .FirstOrDefault(kvp => kvp.Value == tag.ToString())
+        .Key;
+
+    var first = trades.First();
+    var row = first.Fields;
+
+    // ------------------ Core tags ------------------
+    msg.SetField(new AllocID(allocId));
+    msg.SetField(new AllocTransType(AllocTransType.NEW));
+
+    // 🔹 Symbol / security identifiers
+    var (securityId, idSource) = FixValueNormalizer.GetSecurityIdAndSource(row);
+    if (!string.IsNullOrWhiteSpace(securityId))
+        msg.SetField(new SecurityID(securityId));
+    if (!string.IsNullOrWhiteSpace(idSource))
+        msg.SetField(new SecurityIDSource(idSource));
+
+    // 🔹 Side (54)
+    string sideCol = GetColumn(54) ?? "SIDE";
+    string sideVal = row.GetValueOrDefault(sideCol, "BUY");
+    string normalizedSide = FixValueNormalizer.Normalize(Tags.Side, sideVal, row);
+    msg.SetField(new Side(normalizedSide[0]));
+
+    // 🔹 Symbol (55)
+    string symCol = GetColumn(55) ?? "SYMBOL";
+    msg.SetField(new Symbol(row.GetValueOrDefault(symCol, "UNKNOWN")));
+
+    // 🔹 Trade Date (75)
+    string tradeDateCol = GetColumn(75) ?? "TRADE DATE";
+    msg.SetField(new TradeDate(DateTime.TryParse(row.GetValueOrDefault(tradeDateCol), out var td)
+        ? td.ToString("yyyyMMdd")
+        : DateTime.UtcNow.ToString("yyyyMMdd")));
+
+    // 🔹 Aggregate totals
+    string qtyCol = GetColumn(53) ?? "QUANTITY";
+    string priceCol = GetColumn(6) ?? "PRICE";
+    decimal totalQty = trades.Sum(t => decimal.TryParse(t.Fields.GetValueOrDefault(qtyCol), out var q) ? q : 0m);
+    decimal avgPx = trades.Average(t => decimal.TryParse(t.Fields.GetValueOrDefault(priceCol), out var p) ? p : 0m);
+
+    msg.SetField(new Shares(totalQty));
+    msg.SetField(new AvgPx(avgPx));
+
+    // ------------------ NoOrders group ------------------
+    var orderGroup = new Group(73, 11);
+    orderGroup.SetField(new StringField(11, $"AUTO-{allocId}"));
+    msg.SetField(new IntField(73, 1));
+    msg.AddGroup(orderGroup);
+
+    // ------------------ NoAllocs group ------------------
+    var allocList = trades.ToList();
+    msg.SetField(new IntField(78, allocList.Count));
+
+    string allocAcctCol = GetColumn(79) ?? "ALLOC ACCOUNT";
+    string allocQtyCol  = GetColumn(80) ?? "QUANTITY";
+    string allocPxCol   = GetColumn(153) ?? "PRICE";
+
+    foreach (var alloc in allocList)
     {
-        if (trades == null || !trades.Any())
-            throw new ArgumentException("No trades provided to build allocation group.");
+        var allocGroup = new Group(78, 79);
 
-        var msg = new Message();
-        msg.Header.SetField(new BeginString("FIX.4.2"));
-        msg.Header.SetField(new MsgType("J"));
-        msg.Header.SetField(new SenderCompID(senderComp));
-        msg.Header.SetField(new TargetCompID(targetComp));
+        string allocAcct = alloc.Fields.GetValueOrDefault(allocAcctCol, string.Empty);
+        if (!string.IsNullOrWhiteSpace(allocAcct))
+            allocGroup.SetField(new StringField(79, allocAcct.Trim()));
 
-        msg.SetField(new AllocID(allocId));
-        msg.SetField(new AllocTransType(AllocTransType.NEW));
+        string qtyVal = alloc.Fields.GetValueOrDefault(allocQtyCol, string.Empty);
+        if (decimal.TryParse(qtyVal, NumberStyles.Any, CultureInfo.InvariantCulture, out var qty))
+            allocGroup.SetField(new DecimalField(80, qty));
 
-        var first = trades.First();
-        var row = first.Fields;
+        string pxVal = alloc.Fields.GetValueOrDefault(allocPxCol, string.Empty);
+        if (decimal.TryParse(pxVal, NumberStyles.Any, CultureInfo.InvariantCulture, out var px))
+            allocGroup.SetField(new DecimalField(153, px));
 
-        var (securityId, idSource) = FixValueNormalizer.GetSecurityIdAndSource(row);
-        if (!string.IsNullOrWhiteSpace(securityId))
-            msg.SetField(new SecurityID(securityId));
-        if (!string.IsNullOrWhiteSpace(idSource))
-            msg.SetField(new SecurityIDSource(idSource));
-
-        string sideVal = row.GetValueOrDefault("SIDE") ?? "BUY";
-        string normalizedSide = FixValueNormalizer.Normalize(Tags.Side, sideVal, row);
-        msg.SetField(new Side(normalizedSide[0]));
-
-        msg.SetField(new Symbol(row.GetValueOrDefault("SYMBOL") ?? "UNKNOWN"));
-        msg.SetField(new TradeDate(DateTime.TryParse(row.GetValueOrDefault("TRADE DATE"), out var td)
-            ? td.ToString("yyyyMMdd")
-            : DateTime.UtcNow.ToString("yyyyMMdd")));
-
-        // Aggregate quantity and average price
-        decimal totalQty = trades.Sum(t => decimal.TryParse(t.Fields.GetValueOrDefault("QUANTITY"), out var q) ? q : 0m);
-        decimal avgPx = trades.Average(t => decimal.TryParse(t.Fields.GetValueOrDefault("PRICE"), out var p) ? p : 0m);
-
-        msg.SetField(new Shares(totalQty));
-        msg.SetField(new AvgPx(avgPx));
-
-        // Add required NoOrders group (even if just one placeholder)
-        var orderGroup = new Group(73, 11); // 73 = NoOrders, 11 = ClOrdID (first field in group)
-        orderGroup.SetField(new StringField(11, $"AUTO-{allocId}")); // ClOrdID
-        msg.SetField(new IntField(73, 1)); // NoOrders count = 1
-        msg.AddGroup(orderGroup);
-
-
-        // ------------------------------------------------------------------
-        // ✅ Correct FIX 4.2 NoAllocs group structure
-        // ------------------------------------------------------------------
-        var allocList = trades.ToList();
-        msg.SetField(new IntField(78, allocList.Count)); // Tag 78 = NoAllocs count
-                                                         // Root-level average price (6)
-        foreach (var alloc in allocList)
-        {
-            // Define NoAllocs repeating group (groupTag=78, delim=79)
-            var allocGroup = new Group(78, 79);
-
-            // Tag 79 = AllocAccount
-            string allocAccount = alloc.Fields.GetValueOrDefault("ALLOC ACCOUNT", string.Empty);
-            if (!string.IsNullOrWhiteSpace(allocAccount))
-                allocGroup.SetField(new StringField(79, allocAccount.Trim()));
-
-            // Tag 80 = AllocQty
-            string qtyVal = alloc.Fields.GetValueOrDefault("QUANTITY", string.Empty);
-            if (decimal.TryParse(qtyVal, NumberStyles.Any, CultureInfo.InvariantCulture, out var qty))
-                allocGroup.SetField(new DecimalField(Tags.AllocShares, qty));
-
-            // Tag 153 = AllocAvgPx
-            string priceVal = alloc.Fields.GetValueOrDefault("PRICE", string.Empty);
-            if (decimal.TryParse(priceVal, NumberStyles.Any, CultureInfo.InvariantCulture, out var px))
-                allocGroup.SetField(new DecimalField(153, px));
-
-            // ✅ Add this group into message
-            msg.AddGroup(allocGroup);
-        }
-
-        // Optional: log number of actual group instances
-        _log.LogDebug("Added {Count} allocation groups to FIX message", allocList.Count);
-
-
-        _log.LogInformation("✅ Merged {Count} allocations into AllocID={AllocId}. Generated NoAllocs={AllocCount}.",
-            allocList.Count, allocId, allocList.Count);
-
-        _log.LogDebug("FIX RAW => {RawFix}", msg.ToString().Replace('\u0001', '|'));
-        return msg;
+        msg.AddGroup(allocGroup);
     }
+
+    _log.LogInformation("✅ Merged {Count} allocations into AllocID={AllocId}. Generated NoAllocs={AllocCount}.",
+        allocList.Count, allocId, allocList.Count);
+
+    _log.LogDebug("FIX RAW => {RawFix}", msg.ToString().Replace('\u0001', '|'));
+    return msg;
+}
 
     public string NextAllocId()
     {
