@@ -1,0 +1,26 @@
+{
+    "clientId": "RAJA",
+    "senderDomain": "gmail.com",
+    "predefined": {
+      "49": "RAJA",
+      "56": "RJSYNUAT"
+    },
+    "tradeAllocations": {
+      "TradeDate": "75",
+      "Side": "54",
+      "Symbol": "55",
+      "Cust": "79",
+      "ExecutedQty": "80",
+      "AvgPrc": "153"
+    },
+    "repeatingGroups": {
+      "NoOrders": {
+        "11": "Order"
+      },
+      "NoAllocs": {
+        "79": "Cust",
+        "80": "ExecutedQty",
+        "153": "AvgPrc"
+      }
+    }
+  }

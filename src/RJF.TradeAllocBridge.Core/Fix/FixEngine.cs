@@ -5,124 +5,158 @@ using QuickFix.Store;
 using QuickFix.Transport;
 using RJF.TradeAllocBridge.Core.Config;
 using System.Reflection;
+using System.Text;
 
-namespace RJF.TradeAllocBridge.Core.Fix;
-
-public class FixEngine : IDisposable
+namespace RJF.TradeAllocBridge.Core.Fix
 {
-    private readonly IInitiator _initiator;
-    private readonly ILogger<FixEngine> _logger;
-    private readonly FixConfig _config;
-    private readonly string _configFile;
-    private readonly SessionSettings _sessionSettings;
-
-    public SessionSettings SessionSettings => _sessionSettings;
-
-    public FixEngine(FixApp app, FixConfig config, ILogger<FixEngine> logger)
+    public class FixEngine : IDisposable
     {
-        _logger = logger;
-        _config = config;
+        private IInitiator? _initiator;
+        private readonly ILogger<FixEngine> _logger;
+        private readonly FixConfig _config;
+        private readonly string _configFile;
+        private readonly string _dictPath;
+        private SessionSettings? _sessionSettings;      
 
-        var configDir = Path.Combine(AppContext.BaseDirectory, "cfg");
-        Directory.CreateDirectory(configDir);
-        _configFile = Path.Combine(configDir, "FIX42.cfg");
+        public SessionSettings? SessionSettings => _sessionSettings;
 
-        // Auto-generate configuration if missing
-        if (!File.Exists(_configFile))
+        public FixEngine(FixApp app, FixConfig config, ILogger<FixEngine> logger)
         {
-            GenerateFix42Config(_config, _configFile);
-            _logger.LogInformation("Generated FIX configuration file at {Path}", _configFile);
+            _logger = logger;
+            _config = config;
+
+            var configDir = Path.Combine(AppContext.BaseDirectory, "cfg");
+            Directory.CreateDirectory(configDir);
+            _configFile = Path.Combine(configDir, "FIX42.cfg");
+            _dictPath = Path.Combine(AppContext.BaseDirectory, "cfg", "FIX42.xml");
+
+            if (!File.Exists(_configFile))
+            {
+                WriteDefaultFixConfig();
+                _logger.LogInformation("✅ FIX configuration file generated at {Path}", _configFile);
+            }
+            else
+            {
+                _logger.LogInformation("✅ Using existing FIX configuration file at {Path}", _configFile);
+            }
         }
 
-        _sessionSettings = new SessionSettings(_configFile);
-        var storeFactory = new FileStoreFactory(_sessionSettings);
-        var logFactory = new ScreenLogFactory(_sessionSettings);
-        var messageFactory = new DefaultMessageFactory();
-
-        // Optional SSL initiator (for QuickFIX/n.SSL)
-        Type? sslType = Type.GetType("QuickFix.SSLSocketInitiator, QuickFixn.SSL")
-                          ?? Assembly.GetExecutingAssembly().GetType("QuickFix.SSLSocketInitiator");
-
-        if (_config.UseSsl && sslType is not null)
+        // --------------------------------------------------------------
+        // Create base [DEFAULT] config once
+        // --------------------------------------------------------------
+        private void WriteDefaultFixConfig()
         {
+            var sb = new StringBuilder();
+            sb.AppendLine("[DEFAULT]");
+            sb.AppendLine("ConnectionType=initiator");
+            sb.AppendLine("ReconnectInterval=60");
+            sb.AppendLine("StartTime=00:00:00");
+            sb.AppendLine("EndTime=23:59:59");
+            sb.AppendLine("HeartBtInt=30");
+            sb.AppendLine("SocketConnectHost=127.0.0.1");
+            sb.AppendLine("SocketConnectPort=5001");
+            sb.AppendLine("ResetOnLogout=Y");
+            sb.AppendLine("ResetOnLogon=Y");
+            sb.AppendLine("ResetOnDisconnect=Y");
+            sb.AppendLine("ValidateUserDefinedFields=N");
+            sb.AppendLine("ValidateFieldsOutOfOrder=N");
+            sb.AppendLine("ValidateFieldsHaveValues=N");
+            sb.AppendLine("UseLocalTime=Y");
+            sb.AppendLine("CheckLatency=N");
+            sb.AppendLine("ContinueInitializationOnError=Y");
+            sb.AppendLine("PersistMessages=Y");
+            sb.AppendLine("UseDataDictionary=Y");
+            sb.AppendLine($"DataDictionary={_dictPath}");
+            sb.AppendLine();
+            File.WriteAllText(_configFile, sb.ToString());
+        }
+
+        // --------------------------------------------------------------
+        // Append new sessions instead of overwriting the file
+        // --------------------------------------------------------------
+        public void AppendSessionsIfMissing(IEnumerable<(string Sender, string Target)> sessions)
+        {
+            if (!File.Exists(_configFile))
+                WriteDefaultFixConfig();
+
+            var existing = File.ReadAllText(_configFile);
+            var sb = new StringBuilder();
+
+            foreach (var (Sender, Target) in sessions)
+            {
+                string marker = $"SenderCompID={Sender}";
+                if (existing.Contains(marker))
+                {
+                    _logger.LogInformation("ℹ️ Session {Sender}->{Target} already exists, skipping append.", Sender, Target);
+                    continue;
+                }
+
+                _logger.LogInformation("➕ Appending new session {Sender}->{Target} to FIX42.cfg", Sender, Target);
+
+                sb.AppendLine("[SESSION]");
+                sb.AppendLine("BeginString=FIX.4.2");
+                sb.AppendLine("FileStorePath=store");
+                sb.AppendLine($"SenderCompID={Sender}");
+                sb.AppendLine($"TargetCompID={Target}");
+                sb.AppendLine();
+            }
+
+            if (sb.Length > 0)
+                File.AppendAllText(_configFile, sb.ToString());
+        }
+
+        // --------------------------------------------------------------
+        // Reload configuration and initialize initiator
+        // --------------------------------------------------------------
+        public void ReloadSettings(FixApp app)
+        {
+            _logger.LogInformation("♻️ Reloading SessionSettings and reinitializing initiator...");
+
+            _sessionSettings = new SessionSettings(_configFile);
+            foreach (SessionID sessionId in _sessionSettings.GetSessions())
+            {
+                var dict = _sessionSettings.Get(sessionId);
+                dict.SetString("DataDictionary", _dictPath);
+            }
+
+            var storeFactory = new FileStoreFactory(_sessionSettings);
+            var logFactory = new ScreenLogFactory(_sessionSettings);
+            var messageFactory = new DefaultMessageFactory();
+            _initiator = new SocketInitiator(app, storeFactory, _sessionSettings, logFactory, messageFactory);
+        }
+
+        // --------------------------------------------------------------
+        // Start the FIX initiator
+        // --------------------------------------------------------------
+        public void Start()
+        {
+            if (_initiator == null)
+            {
+                _logger.LogError("❌ Initiator not initialized. Did you call ReloadSettings()?");
+                return;
+            }
+
+            _logger.LogInformation("Starting FIX engine...");
+
             try
             {
-                _logger.LogInformation("Detected SSL-capable QuickFIX/n build, initializing secure initiator...");
-                _initiator = (IInitiator)Activator.CreateInstance(
-                    sslType,
-                    app, storeFactory, _sessionSettings, logFactory, messageFactory
-                )!;
-                return;
+                var dd = new QuickFix.DataDictionary.DataDictionary(_dictPath);
+                _logger.LogInformation("✅ FIX42 dictionary parsed successfully (Fields={Fields}, Messages={Msgs})",
+                    dd.FieldsByTag.Count, dd.Messages.Count);
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "SSL initialization failed, falling back to TCP initiator.");
+                _logger.LogError(ex, "❌ Failed to load FIX42.xml dictionary.");
             }
-        }
-
-        _logger.LogInformation("Initializing FIX engine over TCP {Host}:{Port}", _config.Host, _config.Port);
-        _initiator = new SocketInitiator(app, storeFactory, _sessionSettings, logFactory, messageFactory);
-    }
-
-    // ✅ Generates a FIX 4.2-compatible config using a single DataDictionary
-    private static void GenerateFix42Config(FixConfig cfg, string filePath)
-    {
-        var sb = new System.Text.StringBuilder();
-        sb.AppendLine("[DEFAULT]");
-        sb.AppendLine("ConnectionType=initiator");
-        sb.AppendLine($"ReconnectInterval={cfg.ReconnectInterval}");
-        sb.AppendLine($"FileStorePath={cfg.FileStorePath}");
-        sb.AppendLine($"StartTime={cfg.StartTime}");
-        sb.AppendLine($"EndTime={cfg.EndTime}");
-        sb.AppendLine($"HeartBtInt={cfg.HeartBtInt}");
-        sb.AppendLine($"SocketConnectHost={cfg.Host}");
-        sb.AppendLine($"SocketConnectPort={cfg.Port}");
-        sb.AppendLine($"ResetOnLogout={(cfg.ResetOnLogout ? "Y" : "N")}");
-        sb.AppendLine($"ResetOnDisconnect={(cfg.ResetOnDisconnect ? "Y" : "N")}");
-        sb.AppendLine($"ValidateFieldsOutOfOrder={(cfg.ValidateFieldsOutOfOrder ? "Y" : "N")}");
-        sb.AppendLine($"UseLocalTime={(cfg.UseLocalTime ? "Y" : "N")}");
-        sb.AppendLine($"CheckLatency={(cfg.CheckLatency ? "Y" : "N")}");
-        sb.AppendLine($"ContinueInitializationOnError={(cfg.ContinueInitializationOnError ? "Y" : "N")}");
-        sb.AppendLine($"PersistMessages={(cfg.PersistMessages ? "Y" : "N")}");
-        sb.AppendLine("UseDataDictionary=Y");
-
-        // FIX 4.2 only uses one dictionary
-        var dictPath = Path.Combine("cfg", "FIX42.xml").Replace("\\", "/");
-        sb.AppendLine($"DataDictionary={dictPath}");
-
-        sb.AppendLine();
-        sb.AppendLine("[SESSION]");
-        sb.AppendLine($"BeginString={cfg.BeginString}");
-        sb.AppendLine($"SenderCompID={cfg.SenderCompId}");
-        sb.AppendLine($"TargetCompID={cfg.TargetCompId}");
-
-        File.WriteAllText(filePath, sb.ToString());
-    }
-
-    public void Start()
-    {
-        try
-        {
-            _logger.LogInformation("Starting FIX engine...");
-
-            var dictPath = Path.Combine(AppContext.BaseDirectory, "cfg", "FIX42.xml");
-            _logger.LogInformation("🔍 Checking FIX dictionary: {Path} (Exists={Exists})", dictPath, File.Exists(dictPath));
-
-            if (!File.Exists(dictPath))
-                throw new FileNotFoundException("FIX42.xml not found", dictPath);
-
-            var bytes = File.ReadAllBytes(dictPath).Take(16).ToArray();
-            _logger.LogInformation("  • First 16 bytes (hex): {Hex}", BitConverter.ToString(bytes));
 
             _initiator.Start();
 
-            // Log session dictionary states
             foreach (SessionID sessionId in _initiator.GetSessionIDs())
             {
                 var session = Session.LookupSession(sessionId);
                 if (session == null)
                 {
-                    _logger.LogWarning("⚠️ Could not find session for {SessionID}", sessionId);
+                    _logger.LogWarning("⚠️ Session {SessionID} not found after start", sessionId);
                     continue;
                 }
 
@@ -130,16 +164,9 @@ public class FixEngine : IDisposable
                 string ddDesc = "(none)";
                 if (ddProvider != null)
                 {
-                    try
-                    {
-                        var dd = ddProvider.GetApplicationDataDictionary(sessionId.BeginString);
-                        if (dd != null)
-                            ddDesc = $"Loaded FIX dictionary with {dd.FieldsByTag.Count} fields, {dd.Messages.Count} messages";
-                    }
-                    catch (Exception ex)
-                    {
-                        _logger.LogWarning(ex, "Failed to inspect DataDictionary for {SessionID}", sessionId);
-                    }
+                    var dd = ddProvider.GetSessionDataDictionary(sessionId.BeginString);
+                    if (dd != null)
+                        ddDesc = $"Loaded FIX dictionary with {dd.FieldsByTag.Count} fields, {dd.Messages.Count} messages";
                 }
 
                 _logger.LogInformation("🔍 Session {SessionID} dictionary info:", sessionId);
@@ -148,30 +175,24 @@ public class FixEngine : IDisposable
 
             _logger.LogInformation("✅ FIX engine started successfully using {Config}", _configFile);
         }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "❌ Failed to start FIX engine.");
-            throw;
-        }
-    }
 
-    public void Stop()
-    {
-        _logger.LogInformation("Stopping FIX engine...");
-        try
+        public void Stop()
         {
-            _initiator.Stop();
-            _logger.LogInformation("FIX engine stopped cleanly.");
+            try
+            {
+                _initiator?.Stop();
+                _logger.LogInformation("🛑 FIX engine stopped cleanly.");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error stopping FIX engine.");
+            }
         }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Error during FIX engine shutdown.");
-        }
-    }
 
-    public void Dispose()
-    {
-        Stop();
-        GC.SuppressFinalize(this);
+        public void Dispose()
+        {
+            Stop();
+            GC.SuppressFinalize(this);
+        }
     }
 }

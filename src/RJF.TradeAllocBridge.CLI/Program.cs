@@ -75,7 +75,7 @@ namespace RJF.TradeAllocBridge.CLI
                 // ✅ Manual verification of dictionary load
                 try
                 {
-                    var dictPath = "C://Fix//FIX42.xml";
+                       var dictPath = Path.Combine(AppContext.BaseDirectory, "cfg", "FIX42.xml");
                     var dd = new QuickFix.DataDictionary.DataDictionary(dictPath);
                     Console.WriteLine($"✅ Dictionary loaded successfully: {dictPath}");
                     Console.WriteLine($"   Fields: {dd.FieldsByTag.Count}, Messages: {dd.Messages.Count}");

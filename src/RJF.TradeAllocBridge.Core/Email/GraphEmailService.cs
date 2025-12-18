@@ -148,7 +148,8 @@ public class GraphEmailService
                                 if (att is FileAttachment fileAttachment &&
                                     fileAttachment.Name != null &&
                                     (fileAttachment.Name.EndsWith(".xlsx", StringComparison.OrdinalIgnoreCase) ||
-                                     fileAttachment.Name.EndsWith(".xls", StringComparison.OrdinalIgnoreCase)))
+                                     fileAttachment.Name.EndsWith(".xls", StringComparison.OrdinalIgnoreCase) ||
+                                     fileAttachment.Name.EndsWith(".csv", StringComparison.OrdinalIgnoreCase)))
                                 {
                                     var safeFileName = Path.GetFileName(fileAttachment.Name);
                                     var savePath = Path.Combine(_config.DownloadPath ?? "attachments", safeFileName);

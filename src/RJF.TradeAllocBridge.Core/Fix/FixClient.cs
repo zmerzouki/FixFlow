@@ -1,7 +1,7 @@
-﻿using QuickFix;
-using Microsoft.Extensions.Logging;
+﻿using Microsoft.Extensions.Logging;
+using QuickFix;
+using QuickFix.Fields;
 using System.Text;
-using System.Globalization;
 
 namespace RJF.TradeAllocBridge.Core.Fix
 {
@@ -10,8 +10,9 @@ namespace RJF.TradeAllocBridge.Core.Fix
         private readonly ILogger<FixClient> _logger;
         private readonly FixApp _app;
         private readonly string _logPath;
-        private readonly QuickFix.DataDictionary.DataDictionary? _fix42TransportDict;
-        private readonly QuickFix.DataDictionary.DataDictionary? _fix42AppDict;
+        private readonly QuickFix.DataDictionary.DataDictionary? _fix42Dictionary;
+
+        private string _dictPath = "";
 
         public FixClient(ILogger<FixClient> logger, FixApp app)
         {
@@ -21,33 +22,64 @@ namespace RJF.TradeAllocBridge.Core.Fix
             _logPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "logs");
             Directory.CreateDirectory(_logPath);
 
+            // Resolve FIX42.xml from cfg folder relative to executable
+            _dictPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "cfg", "FIX42.xml");
+
             try
             {
-                var baseDir = AppContext.BaseDirectory;
-                var fixTransport = Path.Combine(baseDir, "cfg", "FIX42.xml");
-                var fixApp = Path.Combine(baseDir, "cfg", "FIX42.xml");
-
-                if (File.Exists(fixTransport))
+                if (File.Exists(_dictPath))
                 {
-                    _fix42TransportDict = new QuickFix.DataDictionary.DataDictionary(fixTransport);
-                    _fix42AppDict = new QuickFix.DataDictionary.DataDictionary(fixApp);
-                    _logger.LogInformation("✅ FIX42 dictionaries loaded successfully for validation from {Path}", fixTransport);
+                    _fix42Dictionary = new QuickFix.DataDictionary.DataDictionary(_dictPath);
+                    _logger.LogInformation("✅ FIX42 dictionary loaded successfully for validation from {Path}", _dictPath);
+                    _logger.LogInformation("   Fields={Fields}, Messages={Messages}",
+                        _fix42Dictionary.FieldsByTag.Count, _fix42Dictionary.Messages.Count);
                 }
                 else
                 {
-                    _logger.LogWarning("⚠️ FIX42.xml not found at {Path}. Structural validation will be skipped.", fixTransport);
+                    _logger.LogWarning("⚠️ FIX42.xml not found at {Path}. Structural validation will be skipped.", _dictPath);
                 }
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Failed to load FIX42 DataDictionary for validation.");
+                _logger.LogError(ex, "❌ Failed to load FIX42 DataDictionary for validation.");
             }
         }
 
-        public async Task<string> SendAsync(Message msg)
+        // -------------------------------------------------------------
+        // Send Message (validated, session-safe, full logging)
+        // -------------------------------------------------------------
+        public async Task<string> SendAsync(Message msg, SessionID? sessionID = null)
         {
             try
             {
+                // 🧩 Determine session dynamically from message header
+                var senderCompID = msg.Header.GetString(QuickFix.Fields.Tags.SenderCompID);
+                var targetCompID = msg.Header.GetString(QuickFix.Fields.Tags.TargetCompID);
+                var beginString = "FIX.4.2";
+                var sessionId = sessionID ?? new SessionID(beginString, senderCompID, targetCompID);
+                var session = Session.LookupSession(sessionId);
+
+                if (session == null)
+                {
+                    _logger.LogError("❌ No active FIX session found for {Sender}->{Target}.", senderCompID, targetCompID);
+                    return "NoSession";
+                }
+
+                // ✅ Sync session headers to message
+                msg.Header.SetField(new QuickFix.Fields.BeginString("FIX.4.2"));
+                msg.Header.SetField(new QuickFix.Fields.MsgType(msg.Header.GetString(QuickFix.Fields.Tags.MsgType)));
+                msg.Header.SetField(new QuickFix.Fields.SenderCompID(sessionId.SenderCompID));
+                msg.Header.SetField(new QuickFix.Fields.TargetCompID(sessionId.TargetCompID));
+
+                // ✅ Add required headers for validation (QuickFIX/n fills them when sending)
+                string serialized = msg.ToString();
+                int bodyLength = serialized.Length;
+                msg.Header.SetField(new QuickFix.Fields.BodyLength(bodyLength));
+                msg.Header.SetField(new QuickFix.Fields.MsgSeqNum(1));
+                msg.Header.SetField(new QuickFix.Fields.SendingTime(DateTime.UtcNow));
+                msg.Trailer.SetField(new QuickFix.Fields.CheckSum("000"));
+
+                // 🔍 Validate before send
                 var validationErrors = ValidateAllocation(msg);
                 if (validationErrors.Any())
                 {
@@ -56,32 +88,31 @@ namespace RJF.TradeAllocBridge.Core.Fix
                     return errorText;
                 }
 
-
-                // ✅ Deep copy for logging
                 var msgClone = CloneMessage(msg);
                 await LogFixMessageAsync(msgClone, "OUTBOUND");
 
-                
-                // ✅ Send via active FIX session
-                if (_app.ActiveSession != null)
+                _logger.LogDebug("🔍 Preparing to send FIX message using session {SessionID}", session.SessionID);
+
+                bool ok = Session.SendToTarget(msg, session.SessionID);
+                _logger.LogInformation("📤 FIX message sent via session {Session}: {Status}",
+                    session.SessionID, ok ? "OK" : "FAILED");
+
+                // ✅ Log final serialized wire-format message
+                try
                 {
-                    bool ok = Session.SendToTarget(msg, _app.ActiveSession.SessionID);
-                    _logger.LogInformation("FIX message sent: {Status}", ok ? "OK" : "FAILED");
-                    return ok ? "OK" : "FAILED";
+                    var wire = msg.ToString().Replace('\u0001', '|');
+                    var today = DateTime.Now.ToString("yyyyMMdd");
+                    var logFile = Path.Combine(_logPath, $"fix_wire_{today}.log");
+                    await File.AppendAllTextAsync(logFile,
+                        $"[{DateTime.Now:HH:mm:ss}] {session.SessionID} SENT\n{wire}\n\n");
+                    _logger.LogInformation("🧾 Logged serialized wire-format FIX message to {File}", logFile);
                 }
-                if (_app.Engine != null && _app.Engine.SessionSettings != null && _app.ActiveSession != null)
+                catch (Exception logEx)
                 {
-                    var sessionId = _app.ActiveSession.SessionID;
-                    var section = _app.Engine.SessionSettings.Get(sessionId);
-
-                    var appDict = section.Has("AppDataDictionary") ? section.GetString("AppDataDictionary") : "(none)";
-                    var transportDict = section.Has("TransportDataDictionary") ? section.GetString("TransportDataDictionary") : "(none)";
-
-                    _logger.LogDebug("🔍 Live session {Session} dictionaries: App={AppDict}, Transport={TransportDict}", sessionId, appDict, transportDict);
+                    _logger.LogWarning(logEx, "⚠️ Failed to log serialized FIX message after send.");
                 }
 
-                _logger.LogWarning("No active FIX session found (not logged on yet).");
-                return "NoSession";
+                return ok ? "OK" : "FAILED";
             }
             catch (Exception ex)
             {
@@ -90,79 +121,72 @@ namespace RJF.TradeAllocBridge.Core.Fix
             }
         }
 
-        // ================================
-        // FIX Message Validation
-        // ================================
+        // -------------------------------------------------------------
+        // Structural + Logical Validation (FIX 4.2)
+        // -------------------------------------------------------------
         private List<string> ValidateAllocation(Message msg)
         {
             var errors = new List<string>();
 
+            if (_fix42Dictionary == null)
+            {
+                _logger.LogWarning("⚠️ Skipping FIX42 structural validation (dictionary not loaded).");
+                return errors;
+            }
+
             try
             {
-                // 🔍 Determine consistent FIX42.xml path (CLI or service runtime)
-                var basePath = AppDomain.CurrentDomain.BaseDirectory;
-                var dictPath = Path.Combine(basePath, "cfg", "FIX42.xml");
-
-                if (!File.Exists(dictPath))
-                {
-                    // fallback: for cases when executing from Core instead of CLI
-                    var alt = Path.GetFullPath(Path.Combine(basePath, "..", "..", "..", "cfg", "FIX42.xml"));
-                    if (File.Exists(alt))
-                        dictPath = alt;
-                }
-
-                _logger.LogDebug("🔍 FIX dictionary base path: {Base}", basePath);
-                _logger.LogDebug("🔍 FIX dictionary exists? {Exists}", File.Exists(dictPath));
-                _logger.LogDebug("🔍 Using dictionary at: {Path}", dictPath);
-
-                if (!File.Exists(dictPath))
-                {
-                    _logger.LogWarning("⚠️ FIX42 dictionary not found at {Path}. Skipping structural validation.", dictPath);
-                    return errors;
-                }
-
-                var dd = new QuickFix.DataDictionary.DataDictionary(dictPath);
                 var msgType = msg.Header.GetString(QuickFix.Fields.Tags.MsgType);
+                _logger.LogDebug("🔍 Performing FIX42 structural validation for MsgType={MsgType}", msgType);
 
-                _logger.LogDebug("Performing FIX42 structural validation for MsgType={MsgType}", msgType);
-                QuickFix.DataDictionary.DataDictionary.Validate(msg, null, dd, "FIX.4.2", msgType);
+                QuickFix.DataDictionary.DataDictionary.Validate(
+                    msg,
+                    null,
+                    _fix42Dictionary,
+                    "FIX.4.2",
+                    msgType
+                );
+
+                _logger.LogDebug("✅ Structural validation passed for MsgType={MsgType}", msgType);
             }
             catch (QuickFix.RequiredTagMissing ex)
             {
-                _logger.LogWarning("⚠️ FIX42 structural validation failed. Required tag missing: {Message}", ex.Message);
-                errors.Add("Structural validation error: Required tag missing");
+                if (ex.Field > 0)
+                {
+                    _logger.LogWarning("❗ Missing required tag {Tag}", ex.Field);
+                    errors.Add($"Required tag missing: {ex.Field}");
+                }
+                else
+                {
+                    _logger.LogWarning("⚠️ Structural validation failed: {Message}", ex.Message);
+                    errors.Add($"Required tag missing: {ex.Message}");
+                }
             }
             catch (QuickFix.InvalidMessage ex)
             {
-                _logger.LogWarning("⚠️ FIX message structure invalid: {Message}", ex.Message);
-                errors.Add("Structural validation error: Invalid message structure");
+                _logger.LogWarning("⚠️ Structural validation failed: Invalid message: {Message}", ex.Message);
+                errors.Add($"Invalid message structure: {ex.Message}");
             }
             catch (Exception ex)
             {
-                _logger.LogWarning("⚠️ FIX structural validation failed unexpectedly: {Message}", ex.Message);
+                _logger.LogWarning("⚠️ Unexpected structural validation error: {Message}", ex.Message);
                 errors.Add($"Structural validation error: {ex.Message}");
             }
 
-            // ✅ Logical (field presence) validation
-            bool hasAllocID = msg.IsSetField(70);
-            bool hasTradeDate = msg.IsSetField(75);
-            bool hasSide = msg.IsSetField(54);
-            bool hasOrders = msg.IsSetField(73);
-            bool hasAllocs = msg.IsSetField(78);
-
-            if (!hasAllocID) errors.Add("AllocID (70) missing");
-            if (!hasTradeDate) errors.Add("TradeDate (75) missing");
-            if (!hasSide) errors.Add("Side (54) missing");
-            if (!hasOrders) errors.Add("NoOrders (73) group missing or empty");
-            if (!hasAllocs) errors.Add("NoAllocs (78) group missing or empty");
+            // ✅ Logical field checks
+            if (!msg.IsSetField(70)) errors.Add("AllocID (70) missing");
+            if (!msg.IsSetField(71)) errors.Add("AllocTransType (71) missing");
+            if (!msg.IsSetField(75)) errors.Add("TradeDate (75) missing");
+            if (!msg.IsSetField(54)) errors.Add("Side (54) missing");
+            if (!msg.IsSetField(73)) errors.Add("NoOrders (73) missing or empty");
+            if (!msg.IsSetField(78)) errors.Add("NoAllocs (78) missing or empty");
 
             return errors;
         }
 
-
-        // ================================
-        // Manual Deep Copy for Message
-        // ================================
+        // -------------------------------------------------------------
+        // Deep Copy (for safe logging)
+        // -------------------------------------------------------------
         private Message CloneMessage(Message original)
         {
             var copy = new Message();
@@ -172,7 +196,6 @@ namespace RJF.TradeAllocBridge.Core.Fix
             foreach (var field in original)
                 copy.SetField(field.Value);
 
-            // Copy repeating groups
             foreach (int groupTag in original.FieldOrder)
             {
                 int count = original.GroupCount(groupTag);
@@ -187,9 +210,9 @@ namespace RJF.TradeAllocBridge.Core.Fix
             return copy;
         }
 
-        // ================================
-        // Outbound Logging (Human Readable)
-        // ================================
+        // -------------------------------------------------------------
+        // Log Outbound FIX Message (pre-send)
+        // -------------------------------------------------------------
         private async Task LogFixMessageAsync(Message msg, string direction)
         {
             var today = DateTime.Now.ToString("yyyyMMdd");
@@ -203,7 +226,7 @@ namespace RJF.TradeAllocBridge.Core.Fix
             sb.AppendLine();
 
             await File.AppendAllTextAsync(logFile, sb.ToString());
-            _logger.LogInformation("Logged FIX message to {File}", logFile);
+            _logger.LogInformation("📝 Logged FIX message to {File}", logFile);
         }
     }
 }
