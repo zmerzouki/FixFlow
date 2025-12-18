@@ -15,15 +15,5 @@
     "ALLOC ACCOUNT": "79",
     "QUANTITY": "80",
     "PRICE": "153"
-  },
-  "repeatingGroups": {
-    "NoOrders": {
-      "11": "Cl Ord ID"
-    },
-    "NoAllocs": {
-      "79": "Alloc Account",
-      "80": "Alloc Qty",
-      "153": "Alloc AvgPx"
-    }
   }
 }

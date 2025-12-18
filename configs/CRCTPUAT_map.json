@@ -13,15 +13,5 @@
     "CUSIP": "48",
     "ISIN": "48",
     "SEDOL": "48"
-  },
-  "repeatingGroups": {
-    "NoOrders": {
-      "11": "ORDER ID"
-    },
-    "NoAllocs": {
-      "79": "ALLOC ACCOUNT",
-      "80": "QUANTITY",
-      "153": "PRICE"
-    }
   }
 }
