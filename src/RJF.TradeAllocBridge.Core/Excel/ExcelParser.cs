@@ -236,23 +236,31 @@ public class ExcelParser
         if (cell.CellType == CellType.Formula)
         {
             // Evaluate formula and get the cached result
+            if (cell.CachedFormulaResultType == CellType.Numeric && DateUtil.IsCellDateFormatted(cell))
+            {
+                var dateValue = cell.DateCellValue;
+                return dateValue?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) ?? string.Empty;
+            }
+            
             return cell.CachedFormulaResultType switch
             {
                 CellType.String => cell.StringCellValue ?? string.Empty,
-                CellType.Numeric => DateUtil.IsCellDateFormatted(cell)
-                    ? cell.DateCellValue.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)
-                    : cell.NumericCellValue.ToString(CultureInfo.InvariantCulture),
+                CellType.Numeric => cell.NumericCellValue.ToString(CultureInfo.InvariantCulture),
                 CellType.Boolean => cell.BooleanCellValue.ToString(),
                 _ => string.Empty
             };
         }
 
+        if (cell.CellType == CellType.Numeric && DateUtil.IsCellDateFormatted(cell))
+        {
+            var dateValue = cell.DateCellValue;
+            return dateValue?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) ?? string.Empty;
+        }
+
         return cell.CellType switch
         {
             CellType.String => cell.StringCellValue ?? string.Empty,
-            CellType.Numeric => DateUtil.IsCellDateFormatted(cell)
-                ? cell.DateCellValue.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)
-                : cell.NumericCellValue.ToString(CultureInfo.InvariantCulture),
+            CellType.Numeric => cell.NumericCellValue.ToString(CultureInfo.InvariantCulture),
             CellType.Boolean => cell.BooleanCellValue.ToString(),
             _ => string.Empty
         };
