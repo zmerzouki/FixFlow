@@ -26,6 +26,8 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "scripts", "scripts", "{A2F1
 		Start-Stunnel.ps1 = Start-Stunnel.ps1
 	EndProjectSection
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "RJF.TradeAllocBridge.WPF", "src\RJF.TradeAllocBridge.WPF\RJF.TradeAllocBridge.WPF.csproj", "{59D7A230-E347-8371-9CC8-BD5770BBAB01}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -44,6 +46,10 @@ Global
 		{C3333333-3333-3333-3333-333333333333}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{C3333333-3333-3333-3333-333333333333}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{C3333333-3333-3333-3333-333333333333}.Release|Any CPU.Build.0 = Release|Any CPU
+		{59D7A230-E347-8371-9CC8-BD5770BBAB01}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{59D7A230-E347-8371-9CC8-BD5770BBAB01}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{59D7A230-E347-8371-9CC8-BD5770BBAB01}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{59D7A230-E347-8371-9CC8-BD5770BBAB01}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

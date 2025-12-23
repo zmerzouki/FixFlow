@@ -1,0 +1,134 @@
+﻿<UserControl
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:av="http://schemas.microsoft.com/expression/blend/2008" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" mc:Ignorable="av" x:Class="RJF.TradeAllocBridge.WPF.Views.DirectIngestionView"
+             Background="#ffffff">
+    <ScrollViewer Padding="20" VerticalScrollBarVisibility="Auto">
+        <StackPanel Orientation="Vertical">
+            <!-- Client Selection Section -->
+            <StackPanel Orientation="Vertical" Margin="0,0,0,20">
+                <TextBlock FontSize="14" FontWeight="SemiBold" Foreground="#333"><Run Text="1. Select Client"/></TextBlock>
+                <ComboBox x:Name="ClientComboBox"
+                          ItemsSource="{Binding AvailableClients}"
+                          SelectedValuePath="Key"
+                          DisplayMemberPath="Value"
+                          Padding="10"
+                          FontSize="12"
+                          Height="36"
+                          SelectedItem="{Binding SelectedClient, UpdateSourceTrigger=PropertyChanged}"/>
+                <TextBlock FontSize="11" Foreground="#999" TextWrapping="Wrap"><Run Text="Select a client from the dropdown. The corresponding field mapping will be loaded automatically."/></TextBlock>
+            </StackPanel>
+
+            <!-- Client Info Display -->
+            <Border Style="{StaticResource DragDropZone}" Padding="15">
+                <StackPanel Orientation="Vertical">
+                    <TextBlock FontSize="12" FontWeight="SemiBold" Foreground="#333"><Run Text="Client Mapping Info"/></TextBlock>
+                    <TextBlock FontSize="11" Foreground="#666"><Run FontWeight="Bold" Text="Client ID:"/><Run Text=" "/><Run Text="{Binding SelectedClientId, FallbackValue=(None selected), Mode=OneWay}"/></TextBlock>
+                    <TextBlock FontSize="11" Foreground="#666"><Run FontWeight="Bold" Text="Sender Domain:"/><Run Text=" "/><Run Text="{Binding SelectedClientDomain, FallbackValue=(None selected), Mode=OneWay}"/></TextBlock>
+                    <TextBlock FontSize="11" Foreground="#666"><Run FontWeight="Bold" Text="FIX Sender/Target:"/><Run Text=" "/><Run Text="{Binding SelectedClientFix, FallbackValue=(None selected), Mode=OneWay}"/></TextBlock>
+                    <TextBlock FontSize="10" Foreground="#999" TextWrapping="Wrap" Margin="0,5,0,0" Height="17"><Run Text="{Binding MappedFieldsCount, Mode=OneWay}"/><Run Text=" field(s) mapped in configuration"/></TextBlock>
+                </StackPanel>
+            </Border>
+
+            <!-- File Drop Zone Section -->
+            <StackPanel Orientation="Vertical" Margin="0,0,0,20">
+                <TextBlock FontSize="14" FontWeight="SemiBold" Foreground="#333"><Run Text="2. Select Spreadsheet"/></TextBlock>
+                <Border x:Name="DropZone"
+                        Style="{StaticResource DragDropZone}"
+                        AllowDrop="True"
+                        Padding="30"
+                        MinHeight="120">
+                    <StackPanel Orientation="Vertical" 
+                                VerticalAlignment="Center" 
+                                HorizontalAlignment="Center"
+                                Margin="0,0,0,10">
+                        <TextBlock FontSize="32" TextAlignment="Center" Foreground="#0078d4"><Run Text="📁"/></TextBlock>
+            <TextBlock FontSize="13" FontWeight="SemiBold" TextAlignment="Center" Foreground="#333" Text="Drag and drop a spreadsheet here"/>
+            <!-- Selected File Info -->
+                        <TextBlock FontSize="11" FontWeight="Bold" Foreground="#666" 
+                       Visibility="{Binding SelectedFilePath, Converter={StaticResource StringToVisibilityConverter}}"><Run Text="Selected File: "/><Run Text="{Binding SelectedFileName, Mode=OneWay}"/></TextBlock>
+            <TextBlock FontSize="11" TextAlignment="Center" Foreground="#666" Text="OR"/>
+            <Button x:Name="BrowseButton" 
+                                Content="Browse File"
+                                Style="{StaticResource PrimaryButton}"
+                                Width="120"
+                                HorizontalAlignment="Center"
+                                Command="{Binding BrowseFileCommand}"/>
+                        <TextBlock FontSize="10" TextAlignment="Center" Foreground="#999"><Run Text="Supported: .xlsx, .xls, .csv"/></TextBlock>
+                    </StackPanel>
+                </Border>
+            </StackPanel>
+
+            <!-- Processing Options Section -->
+            <StackPanel Orientation="Vertical" Margin="0,0,0,20">
+                <TextBlock FontSize="14" FontWeight="SemiBold" Foreground="#333"><Run Text="3. Processing Options"/></TextBlock>
+                <CheckBox Content="Dry-run mode (validate only, don't send)" 
+                          IsChecked="{Binding IsDryRun, UpdateSourceTrigger=PropertyChanged}"
+                          FontSize="12"
+                          VerticalContentAlignment="Center"
+                          Padding="5"/>
+                <TextBlock FontSize="10" Foreground="#999" TextWrapping="Wrap"><Run Text="Enable dry-run to validate FIX messages without transmitting them to the trading backend."/></TextBlock>
+                <Button Content="Submit"
+                        Style="{StaticResource PrimaryButton}"
+                        Padding="12,8"
+                        Margin="0,10,0,0"
+                        Width="120"
+                        HorizontalAlignment="Center"
+                        Command="{Binding ProcessCommand}"
+                        IsEnabled="{Binding CanProcess}"/>
+            </StackPanel>
+
+            <!-- Progress Section -->
+            <StackPanel Orientation="Vertical" Margin="0,0,0,20" 
+                        Visibility="{Binding IsProcessing, Converter={StaticResource BoolToVisibilityConverter}}">
+        <TextBlock FontSize="12" FontWeight="SemiBold" Foreground="#333"><Run Text="Processing Progress"/></TextBlock>
+        <ProgressBar Height="13" Value="{Binding ProcessProgress}" Maximum="100" Foreground="#0078d4"/>
+        <TextBlock FontSize="11" Foreground="#666" TextWrapping="Wrap" Text="{Binding StatusMessage}"/>
+      </StackPanel>
+
+            <!-- Results Section -->
+            <StackPanel Orientation="Vertical" Margin="0,0,0,20"
+                        Visibility="{Binding ShowResults, Converter={StaticResource BoolToVisibilityConverter}}">
+                <Border BorderBrush="#d0d0d0" BorderThickness="1" CornerRadius="4" Padding="15" Background="#f9f9f9" Height="119">
+                    <StackPanel Orientation="Vertical">
+                        <TextBlock FontSize="12" FontWeight="SemiBold" Foreground="#333"><Run Text="Processing Results"/></TextBlock>
+            <TextBlock FontSize="11" Foreground="#666"><Run FontWeight="Bold" Text="Allocations Processed: "/><Run Text=""/><Run Text="{Binding ProcessedTradesCount}"/></TextBlock>
+            <TextBlock FontSize="11" Foreground="#666"><Run FontWeight="Bold" Text="Allocations Sent:"/><Run Text=" "/><Run Text="{Binding SentAllocationsCount}"/></TextBlock>
+                        <TextBlock FontSize="11" Foreground="#666"><Run FontWeight="Bold" Text="Success Rate:"/><Run Text=" "/><Run Text="{Binding SuccessRate, Mode=OneWay}"/></TextBlock>
+                        <TextBlock FontSize="11" Foreground="#999" TextWrapping="Wrap" Margin="0,5,0,0" Text="{Binding ResultMessage}"/>
+                    </StackPanel>
+                </Border>
+
+                <!-- FIX Messages Display -->
+                <StackPanel Orientation="Vertical" Margin="0,10,0,0">
+                    <TextBlock FontSize="12" FontWeight="SemiBold" Foreground="#333"><Run Text="Generated FIX Messages"/></TextBlock>
+          <ListBox ItemsSource="{Binding GeneratedMessages}" Height="200" FontSize="11" SelectionChanged="ListBox_SelectionChanged" av:ItemsSource="{av:SampleData ItemCount=5}" SelectionMode="Multiple">
+            <ListBox.ItemTemplate>
+              <DataTemplate>
+                <Border Padding="10" BorderBrush="#e0e0e0" BorderThickness="0,0,0,1" Background="#f9f9f9">
+                  <StackPanel Orientation="Vertical">
+                    <Grid>
+                      <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="*"/>
+                      </Grid.ColumnDefinitions>
+                      <TextBlock Grid.Column="0" FontWeight="SemiBold" Foreground="#333" Text="{Binding AllocId}"/>
+                      <TextBlock Grid.Column="1" Foreground="#666" Margin="15,0,0,0"><Run Text="Symbol:"/><Run Text="{Binding Symbol}" FontWeight="SemiBold"/></TextBlock>
+                      <TextBlock Grid.Column="2" Foreground="#999" Margin="15,0,0,0"><Run Text="Merged Allocations:"/><Run Text="{Binding TradeCount}"/></TextBlock>
+                      <TextBlock Grid.Column="3" HorizontalAlignment="Right" Foreground="#666" FontSize="11"><Run Text="{Binding Status}" FontWeight="SemiBold"/></TextBlock>
+                    </Grid>
+                    <TextBlock TextWrapping="WrapWithOverflow" Foreground="#666" FontSize="10" FontFamily="Courier New"><Run Text="{Binding RawFix}"/></TextBlock>
+                    <TextBlock Visibility="{Binding ErrorMessage, Converter={StaticResource StringToVisibilityConverter}}" 
+                                                   Foreground="#d13438" FontSize="9" Text="{Binding ErrorMessage}"/>
+                  </StackPanel>
+                </Border>
+              </DataTemplate>
+            </ListBox.ItemTemplate>
+          </ListBox>
+        </StackPanel>
+            </StackPanel>
+        </StackPanel>
+    </ScrollViewer>
+</UserControl>
