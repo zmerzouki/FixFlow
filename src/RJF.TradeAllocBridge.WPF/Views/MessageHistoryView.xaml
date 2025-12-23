@@ -1,0 +1,62 @@
+﻿<UserControl x:Class="RJF.TradeAllocBridge.WPF.Views.MessageHistoryView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             Background="#ffffff">
+    <Grid Margin="20">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+
+        <!-- Header -->
+        <StackPanel Grid.Row="0" Orientation="Vertical" Margin="0,0,0,15">
+            <TextBlock FontSize="14" FontWeight="SemiBold" Foreground="#333" Margin="0,0,0,10">FIX Message History</TextBlock>
+            <StackPanel Orientation="Horizontal">
+                <Button Content="🔄 Refresh" Style="{StaticResource PrimaryButton}" Background="#0078d4" Padding="10,6" FontSize="11" Margin="0,0,10,0"/>
+                <Button Content="📋 Copy Selected" Style="{StaticResource PrimaryButton}" Background="#107c10" Padding="10,6" FontSize="11" Margin="0,0,10,0"/>
+                <Button Content="💾 Export to CSV" Style="{StaticResource PrimaryButton}" Background="#7fba00" Padding="10,6" FontSize="11"/>
+            </StackPanel>
+        </StackPanel>
+
+        <!-- Filter Section -->
+        <Border Grid.Row="1" BorderBrush="#d0d0d0" BorderThickness="1" Padding="12" Background="#f9f9f9" Margin="0,0,0,15">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="150"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="150"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+
+                <TextBlock Grid.Column="0" Text="Filter by Client:" VerticalAlignment="Center" FontSize="11" FontWeight="SemiBold"/>
+                <ComboBox Grid.Column="1" Padding="8" FontSize="11" Margin="10,0,10,0" Height="28"/>
+
+                <TextBlock Grid.Column="2" Text="Status:" VerticalAlignment="Center" FontSize="11" FontWeight="SemiBold"/>
+                <ComboBox Grid.Column="3" Padding="8" FontSize="11" Margin="10,0,0,0" Height="28">
+                    <ComboBoxItem>All</ComboBoxItem>
+                    <ComboBoxItem>Success</ComboBoxItem>
+                    <ComboBoxItem>Failed</ComboBoxItem>
+                </ComboBox>
+            </Grid>
+        </Border>
+
+        <!-- Message List -->
+        <DataGrid Grid.Row="2"
+                  AutoGenerateColumns="False"
+                  CanUserAddRows="False"
+                  FontSize="10"
+                  BorderBrush="#d0d0d0"
+                  BorderThickness="1">
+            <DataGrid.Columns>
+                <DataGridTextColumn Header="Timestamp" Width="140" Binding="{Binding Timestamp, StringFormat='yyyy-MM-dd HH:mm:ss'}"/>
+                <DataGridTextColumn Header="Client" Width="100"/>
+                <DataGridTextColumn Header="AllocID" Width="120"/>
+                <DataGridTextColumn Header="Symbol" Width="80"/>
+                <DataGridTextColumn Header="Trades" Width="60" Binding="{Binding TradeCount}"/>
+                <DataGridTextColumn Header="Status" Width="80"/>
+                <DataGridTextColumn Header="Message" Width="*"/>
+            </DataGrid.Columns>
+        </DataGrid>
+    </Grid>
+</UserControl>

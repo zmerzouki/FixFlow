@@ -38,7 +38,7 @@ public class ExcelParser
         {
             ".csv" => ParseCsv(filePath),
             ".xls" => ParseXls(filePath),
-            ".xlsx" or ".xlsm" or ".xltx" or ".xltm" => ParseXlsx(filePath),
+            ".xlsx" or ".xlsm" or ".xltx" or ".xltm" => ParseXls(filePath), // use NPOI for both xls and xlsx to avoid ClosedXML dependency issues
             _ => throw new NotSupportedException($"Extension '{extension}' is not supported. Supported extensions are '.xlsx', '.xlsm', '.xltx', '.xltm', '.xls', and '.csv'.")
         };
     }
@@ -266,69 +266,5 @@ public class ExcelParser
         };
     }
 
-    private List<TradeRecord> ParseXlsx(string filePath)
-    {
-        var trades = new List<TradeRecord>();
-
-        using var workbook = new XLWorkbook(filePath);
-        var ws = workbook.Worksheets.FirstOrDefault();
-
-        if (ws == null)
-        {
-            _logger?.LogWarning("No worksheets found in {File}", filePath);
-            return trades;
-        }
-
-        var headers = ws.FirstRowUsed()
-            ?.Cells()
-            .Select(c => c.GetValue<string>().Trim())
-            .Where(h => !string.IsNullOrWhiteSpace(h))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToList();
-
-        if (headers == null || headers.Count == 0)
-        {
-            _logger?.LogWarning("No headers found in Excel file {File}", filePath);
-            return trades;
-        }
-
-        _logger?.LogInformation("Parsing Excel file {File} with {Count} headers: {Headers}",
-            Path.GetFileName(filePath), headers.Count, string.Join(", ", headers));
-
-        foreach (var row in ws.RowsUsed().Skip(1))
-        {
-            var record = new TradeRecord();
-
-            for (int i = 0; i < headers.Count; i++)
-            {
-                string header = headers[i];
-                string cellValue = string.Empty;
-
-                try
-                {
-                    cellValue = row.Cell(i + 1).GetValue<string>()?.Trim() ?? string.Empty;
-                }
-                catch
-                {
-                    _logger?.LogDebug("Invalid cell at Row {Row}, Col {Col} in {File}", row.RowNumber(), i + 1, filePath);
-                }
-
-                // Guard: prevent duplicate or null keys
-                if (!string.IsNullOrWhiteSpace(header))
-                {
-                    if (!record.Fields.ContainsKey(header))
-                        record.Fields[header] = cellValue;
-                    else
-                        _logger?.LogDebug("Duplicate header '{Header}' ignored in {File}", header, filePath);
-                }
-            }
-
-            // Guard: ensure required structure
-            if (record.Fields.Count > 0)
-                trades.Add(record);
-        }
-
-        _logger?.LogInformation("Parsed {Count} trade record(s) from {File}", trades.Count, Path.GetFileName(filePath));
-        return trades;
-    }
+    // ClosedXML parser removed in favor of NPOI-based path to avoid font-related dependency issues.
 }
