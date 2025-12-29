@@ -81,7 +81,7 @@ namespace RJF.TradeAllocBridge.WPF
             services.AddSingleton<MainWindow>();
 
             // Add these registrations in ConfigureServices:
-            services.AddTransient<MapEditorViewModel>();
+            services.AddSingleton<MapEditorViewModel>();
             services.AddTransient<MapEditorView>();
             services.AddTransient<DirectIngestionView>();
             services.AddTransient<MessageHistoryView>();

@@ -1,9 +1,11 @@
-﻿using System.Collections.ObjectModel;
+using System;
+using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
+using System.Windows;
 using System.Windows.Input;
 using Microsoft.Extensions.Logging;
 using Microsoft.Win32;
@@ -73,13 +75,19 @@ namespace RJF.TradeAllocBridge.WPF.ViewModels
             GeneratedMessages = new ObservableCollection<FixMessageResult>();
             LoadAvailableClients();
 
+            _mappingRepo.MappingsChanged += OnMappingsChanged;
+
             BrowseFileCommand = new RelayCommand(BrowseFile);
             ProcessCommand = new RelayCommand(Process, CanProcessFile);
             ViewLogsCommand = new RelayCommand(ViewLogs);
         }
 
-        private void LoadAvailableClients()
+        private void LoadAvailableClients(bool refreshSelection = false)
         {
+            var previousSelection = refreshSelection ? SelectedClient?.Key : null;
+
+            AvailableClients.Clear();
+
             try
             {
                 var mappings = _mappingRepo.GetAll();
@@ -97,6 +105,33 @@ namespace RJF.TradeAllocBridge.WPF.ViewModels
             {
                 _logger.LogError(ex, "Failed to load available clients");
                 StatusMessage = $"Error loading clients: {ex.Message}";
+            }
+
+            if (refreshSelection)
+            {
+                SelectedClient = null;
+
+                if (!string.IsNullOrWhiteSpace(previousSelection))
+                {
+                    var restoredSelection = AvailableClients.FirstOrDefault(c => c.Key == previousSelection);
+                    if (!string.IsNullOrWhiteSpace(restoredSelection.Key))
+                    {
+                        SelectedClient = restoredSelection;
+                    }
+                }
+            }
+        }
+
+        private void OnMappingsChanged(object? sender, EventArgs e)
+        {
+            var dispatcher = Application.Current?.Dispatcher;
+            if (dispatcher?.CheckAccess() == false)
+            {
+                dispatcher.Invoke(() => LoadAvailableClients(refreshSelection: true));
+            }
+            else
+            {
+                LoadAvailableClients(refreshSelection: true);
             }
         }
 
@@ -284,8 +319,8 @@ namespace RJF.TradeAllocBridge.WPF.ViewModels
             }
         }
 
-        public string SuccessRate => ProcessedTradesCount > 0 
-            ? $"{(SentAllocationsCount * 100.0 / ProcessedTradesCount):F1}%" 
+        public string SuccessRate => ProcessedTradesCount > 0
+            ? $"{(SentAllocationsCount * 100.0 / ProcessedTradesCount):F1}%"
             : "N/A";
 
         public string ResultMessage
