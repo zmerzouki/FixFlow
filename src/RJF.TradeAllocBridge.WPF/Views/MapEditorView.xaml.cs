@@ -32,5 +32,6 @@ namespace RJF.TradeAllocBridge.WPF.Views
         {
 
         }
+
     }
 }

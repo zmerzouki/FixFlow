@@ -1,10 +1,12 @@
-﻿using System.Text.Json;
+using System;
+using System.Text.Json;
 
 namespace RJF.TradeAllocBridge.Core.Mapping;
 
 public class FixMappingRepository
 {
     public string BaseDirectory { get; }
+    public event EventHandler? MappingsChanged;
 
     public FixMappingRepository(string baseDirectory)
     {
@@ -13,6 +15,11 @@ public class FixMappingRepository
 
         BaseDirectory = Path.GetFullPath(baseDirectory);
         Directory.CreateDirectory(BaseDirectory);
+    }
+
+    public void NotifyMappingsChanged()
+    {
+        MappingsChanged?.Invoke(this, EventArgs.Empty);
     }
 
     public IEnumerable<FixMapping> GetAll()
@@ -29,7 +36,7 @@ public class FixMappingRepository
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"⚠️  Failed to load mapping file {file}: {ex.Message}");
+                Console.WriteLine($"??  Failed to load mapping file {file}: {ex.Message}");
             }
             if (mapping != null)
                 yield return mapping;
@@ -45,3 +52,4 @@ public class FixMappingRepository
         return File.Exists(path) ? FixMapping.Load(path) : null;
     }
 }
+

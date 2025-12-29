@@ -1,7 +1,9 @@
-﻿using System.Collections.ObjectModel;
+using System.Collections.ObjectModel;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
+using System.Windows;
+using System.Windows.Controls;
 using System.Windows.Input;
 using Microsoft.Extensions.Logging;
 using RJF.TradeAllocBridge.Core.Config;
@@ -26,6 +28,8 @@ namespace RJF.TradeAllocBridge.WPF.ViewModels
         private string _deliverToCompId = string.Empty;
         private string _newFieldName = string.Empty;
         private string _newFieldTag = string.Empty;
+        private bool _senderCompManuallyEdited;
+        private bool _isProgrammaticSenderCompSet;
         private bool _isEditing;
         private string _statusMessage = "Ready";
         private int _testTradesCount;
@@ -72,6 +76,7 @@ namespace RJF.TradeAllocBridge.WPF.ViewModels
         public ICommand DeleteMappingCommand { get; }
         public ICommand CancelCommand { get; }
         public ICommand AddFieldCommand { get; }
+        public ICommand UpdateFieldCommand { get; }
         public ICommand RemoveFieldCommand { get; }
         public ICommand TestMappingCommand { get; }
         public ICommand DeployMappingCommand { get; }
@@ -93,6 +98,7 @@ namespace RJF.TradeAllocBridge.WPF.ViewModels
             DeleteMappingCommand = new RelayCommand(DeleteMapping, () => SelectedMapping != null && !IsEditing);
             CancelCommand = new RelayCommand(Cancel, () => IsEditing);
             AddFieldCommand = new RelayCommand(AddField, () => CanAddField);
+            UpdateFieldCommand = new RelayCommand(UpdateField, () => CanUpdateField);
             RemoveFieldCommand = new RelayCommand(RemoveField, () => SelectedFieldMapping != null);
             TestMappingCommand = new RelayCommand(TestMapping, () => !IsEditing && SelectedMapping != null);
             DeployMappingCommand = new RelayCommand(DeployMapping, () => !IsEditing && SelectedMapping != null);
@@ -110,11 +116,11 @@ namespace RJF.TradeAllocBridge.WPF.ViewModels
                 {
                     AvailableMappings.Add(mapping.ClientId);
                 }
-                StatusMessage = $"✅ Loaded {AvailableMappings.Count} mapping(s)";
+                StatusMessage = $"? Loaded {AvailableMappings.Count} mapping(s)";
             }
             catch (Exception ex)
             {
-                StatusMessage = $"❌ Error loading mappings: {ex.Message}";
+                StatusMessage = $"? Error loading mappings: {ex.Message}";
                 _logger.LogError(ex, "Failed to load mappings");
             }
         }
@@ -145,7 +151,10 @@ namespace RJF.TradeAllocBridge.WPF.ViewModels
                 if (File.Exists(mapFile))
                 {
                     _currentMapping = MappingConfig.Load(mapFile);
+                    _isProgrammaticSenderCompSet = true;
+                    _senderCompManuallyEdited = false;
                     SenderCompId = _currentMapping.Predefined?.SenderCompID ?? string.Empty;
+                    _isProgrammaticSenderCompSet = false;
                     TargetCompId = _currentMapping.Predefined?.TargetCompID ?? string.Empty;
 
                     FieldMappings.Clear();
@@ -154,14 +163,14 @@ namespace RJF.TradeAllocBridge.WPF.ViewModels
                         FieldMappings.Add(new KeyValuePair<string, string>(kvp.Key, kvp.Value));
                     }
 
-                    StatusMessage = $"✅ Loaded mapping: {clientId}";
+                    StatusMessage = $"? Loaded mapping: {clientId}";
                     OnPropertyChanged(nameof(ClientId));
                     OnPropertyChanged(nameof(SenderDomain));
                 }
             }
             catch (Exception ex)
             {
-                StatusMessage = $"❌ Error loading mapping details: {ex.Message}";
+                StatusMessage = $"? Error loading mapping details: {ex.Message}";
                 _logger.LogError(ex, "Failed to load mapping details for {ClientId}", clientId);
             }
         }
@@ -171,13 +180,16 @@ namespace RJF.TradeAllocBridge.WPF.ViewModels
             get => _currentMapping?.ClientId ?? string.Empty;
             set
             {
-                if (_currentMapping != null && _currentMapping.ClientId != value)
+                var upper = value?.ToUpperInvariant() ?? string.Empty;
+                if (_currentMapping != null && _currentMapping.ClientId != upper)
                 {
-                    _currentMapping.ClientId = value;
+                    _currentMapping.ClientId = upper;
                     OnPropertyChanged(nameof(ClientId));
-                    if (IsEditing && (string.IsNullOrWhiteSpace(SenderCompId) || SenderCompId == "NEW_CLIENT"))
+                    if (IsEditing && !_senderCompManuallyEdited)
                     {
-                        SenderCompId = value;
+                        _isProgrammaticSenderCompSet = true;
+                        SenderCompId = upper;
+                        _isProgrammaticSenderCompSet = false;
                     }
                 }
             }
@@ -196,9 +208,10 @@ namespace RJF.TradeAllocBridge.WPF.ViewModels
             get => _currentMapping?.SenderDomain ?? string.Empty;
             set
             {
-                if (_currentMapping != null && _currentMapping.SenderDomain != value)
+                var upper = value?.ToUpperInvariant() ?? string.Empty;
+                if (_currentMapping != null && _currentMapping.SenderDomain != upper)
                 {
-                    _currentMapping.SenderDomain = value;
+                    _currentMapping.SenderDomain = upper;
                     OnPropertyChanged(nameof(SenderDomain));
                 }
             }
@@ -209,9 +222,14 @@ namespace RJF.TradeAllocBridge.WPF.ViewModels
             get => _senderCompId;
             set
             {
-                if (_senderCompId != value)
+                var upper = value?.ToUpperInvariant() ?? string.Empty;
+                if (_senderCompId != upper)
                 {
-                    _senderCompId = value;
+                    _senderCompId = upper;
+                    if (!_isProgrammaticSenderCompSet)
+                    {
+                        _senderCompManuallyEdited = true;
+                    }
                     OnPropertyChanged(nameof(SenderCompId));
                 }
             }
@@ -222,9 +240,10 @@ namespace RJF.TradeAllocBridge.WPF.ViewModels
             get => _targetCompId;
             set
             {
-                if (_targetCompId != value)
+                var upper = value?.ToUpperInvariant() ?? string.Empty;
+                if (_targetCompId != upper)
                 {
-                    _targetCompId = value;
+                    _targetCompId = upper;
                     OnPropertyChanged(nameof(TargetCompId));
                 }
             }
@@ -235,9 +254,10 @@ namespace RJF.TradeAllocBridge.WPF.ViewModels
             get => _targetSubId;
             set
             {
-                if (_targetSubId != value)
+                var upper = value?.ToUpperInvariant() ?? string.Empty;
+                if (_targetSubId != upper)
                 {
-                    _targetSubId = value;
+                    _targetSubId = upper;
                     OnPropertyChanged(nameof(TargetSubId));
                 }
             }
@@ -248,9 +268,10 @@ namespace RJF.TradeAllocBridge.WPF.ViewModels
             get => _onBehalfOfCompId;
             set
             {
-                if (_onBehalfOfCompId != value)
+                var upper = value?.ToUpperInvariant() ?? string.Empty;
+                if (_onBehalfOfCompId != upper)
                 {
-                    _onBehalfOfCompId = value;
+                    _onBehalfOfCompId = upper;
                     OnPropertyChanged(nameof(OnBehalfOfCompId));
                 }
             }
@@ -261,9 +282,10 @@ namespace RJF.TradeAllocBridge.WPF.ViewModels
             get => _deliverToCompId;
             set
             {
-                if (_deliverToCompId != value)
+                var upper = value?.ToUpperInvariant() ?? string.Empty;
+                if (_deliverToCompId != upper)
                 {
-                    _deliverToCompId = value;
+                    _deliverToCompId = upper;
                     OnPropertyChanged(nameof(DeliverToCompId));
                 }
             }
@@ -278,7 +300,7 @@ namespace RJF.TradeAllocBridge.WPF.ViewModels
                 {
                     _newFieldName = value;
                     OnPropertyChanged(nameof(NewFieldName));
-                    OnPropertyChanged(nameof(CanAddField));
+                    RefreshFieldCommands();
                 }
             }
         }
@@ -292,7 +314,7 @@ namespace RJF.TradeAllocBridge.WPF.ViewModels
                 {
                     _newFieldTag = value;
                     OnPropertyChanged(nameof(NewFieldTag));
-                    OnPropertyChanged(nameof(CanAddField));
+                    RefreshFieldCommands();
                 }
             }
         }
@@ -311,7 +333,13 @@ namespace RJF.TradeAllocBridge.WPF.ViewModels
                 }
 
                 _selectedFieldMapping = value;
+                if (value.HasValue)
+                {
+                    NewFieldName = value.Value.Key;
+                    NewFieldTag = value.Value.Value;
+                }
                 OnPropertyChanged(nameof(SelectedFieldMapping));
+                RefreshFieldCommands();
             }
         }
 
@@ -325,6 +353,7 @@ namespace RJF.TradeAllocBridge.WPF.ViewModels
                     _isEditing = value;
                     OnPropertyChanged(nameof(IsEditing));
                     OnPropertyChanged(nameof(CanSave));
+                    RefreshFieldCommands();
                 }
             }
         }
@@ -342,7 +371,35 @@ namespace RJF.TradeAllocBridge.WPF.ViewModels
             }
         }
 
-        public bool CanAddField => !string.IsNullOrWhiteSpace(NewFieldName) && !string.IsNullOrWhiteSpace(NewFieldTag);
+        public bool CanUpdateField => IsEditing && SelectedFieldMapping.HasValue && IsFieldDirty && !string.IsNullOrWhiteSpace(NewFieldName) && !string.IsNullOrWhiteSpace(NewFieldTag);
+        public bool CanAddField
+        {
+            get
+            {
+                if (string.IsNullOrWhiteSpace(NewFieldName) || string.IsNullOrWhiteSpace(NewFieldTag))
+                {
+                    return false;
+                }
+
+                if (SelectedFieldMapping.HasValue && !IsFieldDirty)
+                {
+                    return false;
+                }
+
+                return true;
+            }
+        }
+
+        private bool IsFieldDirty => !SelectedFieldMapping.HasValue ||
+            !string.Equals(SelectedFieldMapping.Value.Key, NewFieldName, StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(SelectedFieldMapping.Value.Value, NewFieldTag, StringComparison.OrdinalIgnoreCase);
+
+        private void RefreshFieldCommands()
+        {
+            OnPropertyChanged(nameof(CanAddField));
+            OnPropertyChanged(nameof(CanUpdateField));
+            CommandManager.InvalidateRequerySuggested();
+        }
 
         public bool CanSave => IsEditing && !string.IsNullOrWhiteSpace(ClientId) && FieldMappings.Count > 0;
 
@@ -376,48 +433,71 @@ namespace RJF.TradeAllocBridge.WPF.ViewModels
         {
             _currentMapping = new MappingConfig
             {
-                ClientId = "NEW_CLIENT",
-                SenderDomain = "example.com",
+                ClientId = "CLIENT1",
+                SenderDomain = "ACME.COM",
                 Predefined = new PredefinedFields
                 {
-                    SenderCompID = "NEW_CLIENT",
-                    TargetCompID = "RJSYNUAT"
+                    SenderCompID = "CLIENT1",
+                    TargetCompID = "BROKER"
                 },
                 TradeAllocations = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
             };
 
-            ClientId = "NEW_CLIENT";
-            SenderDomain = "example.com";
-            SenderCompId = "NEW_CLIENT";
-            TargetCompId = "RJSYNUAT";
+            ClientId = "CLIENT1";
+            SenderDomain = "ACME.COM";
+            _isProgrammaticSenderCompSet = true;
+            _senderCompManuallyEdited = false;
+            SenderCompId = "CLIENT1";
+            _isProgrammaticSenderCompSet = false;
+            TargetCompId = "BROKER";
             TargetSubId = string.Empty;
             OnBehalfOfCompId = string.Empty;
             DeliverToCompId = string.Empty;
             FieldMappings.Clear();
+            var defaults = new[]
+            {
+                new KeyValuePair<string, string>("Side", "54"),
+                new KeyValuePair<string, string>("Symbol", "55"),
+                new KeyValuePair<string, string>("Trade Date", "75"),
+                new KeyValuePair<string, string>("Allocation Account", "79"),
+                new KeyValuePair<string, string>("Shares Qty", "80"),
+                new KeyValuePair<string, string>("Average Price", "153")
+            };
+            foreach (var kvp in defaults)
+            {
+                FieldMappings.Add(kvp);
+                _currentMapping.TradeAllocations[kvp.Key] = kvp.Value;
+            }
             NewFieldName = string.Empty;
             NewFieldTag = string.Empty;
+            OnPropertyChanged(nameof(CanSave));
+            CommandManager.InvalidateRequerySuggested();
+            OnPropertyChanged(nameof(ClientId));
+            OnPropertyChanged(nameof(SenderDomain));
+            OnPropertyChanged(nameof(SenderCompId));
+            OnPropertyChanged(nameof(TargetCompId));
 
             IsEditing = true;
-            StatusMessage = "📝 Creating new mapping...";
+            StatusMessage = "Creating new mapping...";
         }
 
         private void EditMapping()
         {
             if (SelectedMapping == null)
             {
-                StatusMessage = "⚠️ Please select a mapping to edit";
+                StatusMessage = "Please select a mapping to edit";
                 return;
             }
 
             IsEditing = true;
-            StatusMessage = $"✏️ Editing: {SelectedMapping}";
+            StatusMessage = $"Editing: {SelectedMapping}";
         }
 
         private void SaveMapping()
         {
             if (_currentMapping == null)
             {
-                StatusMessage = "❌ No mapping to save";
+                StatusMessage = "No mapping to save";
                 return;
             }
 
@@ -426,13 +506,13 @@ namespace RJF.TradeAllocBridge.WPF.ViewModels
                 // Validate
                 if (string.IsNullOrWhiteSpace(ClientId))
                 {
-                    StatusMessage = "❌ Client ID is required";
+                    StatusMessage = "? Client ID is required";
                     return;
                 }
 
                 if (FieldMappings.Count == 0)
                 {
-                    StatusMessage = "❌ At least one field mapping is required";
+                    StatusMessage = "? At least one field mapping is required";
                     return;
                 }
 
@@ -460,17 +540,18 @@ namespace RJF.TradeAllocBridge.WPF.ViewModels
                 });
 
                 File.WriteAllText(filepath, json);
-                _logger.LogInformation("✅ Saved mapping: {ClientId} to {File}", ClientId, filename);
+                _logger.LogInformation("? Saved mapping: {ClientId} to {File}", ClientId, filename);
 
                 IsEditing = false;
-                    LoadAvailableMappings();
+                LoadAvailableMappings();
                 SelectedMapping = ClientId;
 
-                StatusMessage = $"✅ Mapping saved: {ClientId}";
+                StatusMessage = $"? Mapping saved: {ClientId}";
+                _mappingRepo.NotifyMappingsChanged();
             }
             catch (Exception ex)
             {
-                StatusMessage = $"❌ Error saving mapping: {ex.Message}";
+                StatusMessage = $"? Error saving mapping: {ex.Message}";
                 _logger.LogError(ex, "Failed to save mapping");
             }
         }
@@ -479,7 +560,7 @@ namespace RJF.TradeAllocBridge.WPF.ViewModels
         {
             if (SelectedMapping == null)
             {
-                StatusMessage = "⚠️ Please select a mapping to delete";
+                StatusMessage = "?? Please select a mapping to delete";
                 return;
             }
 
@@ -492,26 +573,30 @@ namespace RJF.TradeAllocBridge.WPF.ViewModels
                 if (File.Exists(filepath))
                 {
                     File.Delete(filepath);
-                    _logger.LogInformation("🗑️ Deleted mapping: {ClientId}", SelectedMapping);
+                    _logger.LogInformation("??? Deleted mapping: {ClientId}", SelectedMapping);
                     LoadAvailableMappings();
-                    StatusMessage = $"✅ Mapping deleted: {SelectedMapping}";
+                    StatusMessage = $"? Mapping deleted: {SelectedMapping}";
+                    _mappingRepo.NotifyMappingsChanged();
                 }
 
                 if (File.Exists(cliPath))
                 {
                     File.Delete(cliPath);
-                    _logger.LogInformation("🗑️ Deleted deployed mapping copy for: {ClientId}", SelectedMapping);
+                    _logger.LogInformation("??? Deleted deployed mapping copy for: {ClientId}", SelectedMapping);
                 }
             }
             catch (Exception ex)
             {
-                StatusMessage = $"❌ Error deleting mapping: {ex.Message}";
+                StatusMessage = $"? Error deleting mapping: {ex.Message}";
                 _logger.LogError(ex, "Failed to delete mapping");
             }
         }
 
         private void Cancel()
         {
+            var result = ShowCancelConfirmation();
+            if (result != MessageBoxResult.Yes) return;
+
             IsEditing = false;
             if (!string.IsNullOrEmpty(SelectedMapping))
             {
@@ -520,18 +605,77 @@ namespace RJF.TradeAllocBridge.WPF.ViewModels
             StatusMessage = "Cancelled";
         }
 
+        private MessageBoxResult ShowCancelConfirmation()
+        {
+            MessageBoxResult result = MessageBoxResult.No;
+
+            var grid = new Grid
+            {
+                Margin = new Thickness(16)
+            };
+            grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+
+            var text = new TextBlock
+            {
+                Text = "Are you sure you want to cancel your changes?",
+                Margin = new Thickness(0, 0, 0, 12)
+            };
+            Grid.SetRow(text, 0);
+            grid.Children.Add(text);
+
+            var buttonPanel = new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                HorizontalAlignment = HorizontalAlignment.Right
+            };
+
+            var yesButton = new Button { Content = "Yes", MinWidth = 70, IsDefault = true, Margin = new Thickness(0, 0, 8, 0) };
+            var noButton = new Button { Content = "No", MinWidth = 70, IsCancel = true };
+
+            buttonPanel.Children.Add(yesButton);
+            buttonPanel.Children.Add(noButton);
+
+            Grid.SetRow(buttonPanel, 1);
+            grid.Children.Add(buttonPanel);
+
+            var dialog = new Window
+            {
+                Title = "Confirm Cancel",
+                Owner = Application.Current?.MainWindow,
+                WindowStartupLocation = WindowStartupLocation.CenterOwner,
+                ResizeMode = ResizeMode.NoResize,
+                WindowStyle = WindowStyle.ToolWindow,
+                ShowInTaskbar = false,
+                SizeToContent = SizeToContent.WidthAndHeight,
+                Content = grid
+            };
+
+            void OnClose(MessageBoxResult r)
+            {
+                result = r;
+                dialog.DialogResult = true;
+            }
+
+            yesButton.Click += (_, __) => OnClose(MessageBoxResult.Yes);
+            noButton.Click += (_, __) => OnClose(MessageBoxResult.No);
+
+            dialog.ShowDialog();
+            return result;
+        }
+
         private void AddField()
         {
             if (string.IsNullOrWhiteSpace(NewFieldName) || string.IsNullOrWhiteSpace(NewFieldTag))
             {
-                StatusMessage = "⚠️ Field name and tag are required";
+                StatusMessage = "?? Field name and tag are required";
                 return;
             }
 
             // Check if field already exists
             if (FieldMappings.Any(x => x.Key.Equals(NewFieldName, StringComparison.OrdinalIgnoreCase)))
             {
-                StatusMessage = "⚠️ Field already exists";
+                StatusMessage = "?? Field already exists";
                 return;
             }
 
@@ -539,6 +683,40 @@ namespace RJF.TradeAllocBridge.WPF.ViewModels
             NewFieldName = string.Empty;
             NewFieldTag = string.Empty;
             OnPropertyChanged(nameof(CanSave));
+        }
+
+        private void UpdateField()
+        {
+            if (!SelectedFieldMapping.HasValue)
+            {
+                StatusMessage = "?? Select a field to update";
+                return;
+            }
+
+            if (string.IsNullOrWhiteSpace(NewFieldName) || string.IsNullOrWhiteSpace(NewFieldTag))
+            {
+                StatusMessage = "?? Field name and tag are required";
+                return;
+            }
+
+            var duplicate = FieldMappings.Any(x =>
+                !string.Equals(x.Key, SelectedFieldMapping.Value.Key, StringComparison.OrdinalIgnoreCase) &&
+                x.Key.Equals(NewFieldName, StringComparison.OrdinalIgnoreCase));
+            if (duplicate)
+            {
+                StatusMessage = "?? Field name already exists";
+                return;
+            }
+
+            var index = FieldMappings.IndexOf(SelectedFieldMapping.Value);
+            if (index >= 0)
+            {
+                var updated = new KeyValuePair<string, string>(NewFieldName, NewFieldTag);
+                FieldMappings[index] = updated;
+                SelectedFieldMapping = updated;
+                StatusMessage = "✅ Field updated";
+                OnPropertyChanged(nameof(CanSave));
+            }
         }
 
         private void RemoveField()
@@ -552,8 +730,8 @@ namespace RJF.TradeAllocBridge.WPF.ViewModels
 
         private void TestMapping()
         {
-            StatusMessage = "🧪 Testing mapping... (Create a sample spreadsheet and try direct ingestion)";
-            _logger.LogInformation("ℹ️ To test this mapping, use the Direct Ingestion tab with a sample spreadsheet");
+            StatusMessage = "?? Testing mapping... (Create a sample spreadsheet and try direct ingestion)";
+            _logger.LogInformation("?? To test this mapping, use the Direct Ingestion tab with a sample spreadsheet");
         }
 
         private void DeployMapping()
@@ -568,7 +746,7 @@ namespace RJF.TradeAllocBridge.WPF.ViewModels
 
                 if (!File.Exists(sourcePath))
                 {
-                    StatusMessage = "❌ Mapping file not found";
+                    StatusMessage = "? Mapping file not found";
                     return;
                 }
 
@@ -576,19 +754,19 @@ namespace RJF.TradeAllocBridge.WPF.ViewModels
                 var testMapping = MappingConfig.Load(sourcePath);
                 if (testMapping == null)
                 {
-                    StatusMessage = "❌ Invalid mapping configuration";
+                    StatusMessage = "? Invalid mapping configuration";
                     return;
                 }
 
                 Directory.CreateDirectory(_cliConfigsDir);
                 File.Copy(sourcePath, cliPath, overwrite: true);
 
-                StatusMessage = $"✅ Mapping '{SelectedMapping}' deployed to email attachment processing";
-                _logger.LogInformation("🚀 Deployed mapping: {ClientId} to {Path}", SelectedMapping, cliPath);
+                StatusMessage = $"? Mapping '{SelectedMapping}' deployed to email attachment processing";
+                _logger.LogInformation("?? Deployed mapping: {ClientId} to {Path}", SelectedMapping, cliPath);
             }
             catch (Exception ex)
             {
-                StatusMessage = $"❌ Error deploying mapping: {ex.Message}";
+                StatusMessage = $"? Error deploying mapping: {ex.Message}";
                 _logger.LogError(ex, "Failed to deploy mapping");
             }
         }
@@ -611,3 +789,4 @@ namespace RJF.TradeAllocBridge.WPF.ViewModels
         public DateTime Timestamp { get; set; } = DateTime.Now;
     }
 }
+
