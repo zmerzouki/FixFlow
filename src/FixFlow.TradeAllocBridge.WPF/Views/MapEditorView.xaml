@@ -1,0 +1,290 @@
+<UserControl
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:av="http://schemas.microsoft.com/expression/blend/2008" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" mc:Ignorable="av" x:Class="FixFlow.TradeAllocBridge.WPF.Views.MapEditorView"
+             Background="#ffffff" Height="654">
+    <UserControl.Resources>
+        <BitmapImage x:Key="AddIconBitmap" UriSource="/Resources/Icons/Add.png"/>
+        <BitmapImage x:Key="UpdateIconBitmap" UriSource="/Resources/Icons/Update.png"/>
+        <BitmapImage x:Key="DeleteIconBitmap" UriSource="/Resources/Icons/Delete.png"/>
+        <FormatConvertedBitmap x:Key="AddIconBitmapGray" Source="{StaticResource AddIconBitmap}" DestinationFormat="Gray32Float"/>
+        <FormatConvertedBitmap x:Key="UpdateIconBitmapGray" Source="{StaticResource UpdateIconBitmap}" DestinationFormat="Gray32Float"/>
+        <FormatConvertedBitmap x:Key="DeleteIconBitmapGray" Source="{StaticResource DeleteIconBitmap}" DestinationFormat="Gray32Float"/>
+        <Style x:Key="FieldIconButton" TargetType="Button">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="BorderBrush" Value="Transparent"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Padding" Value="0"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Focusable" Value="False"/>
+            <Setter Property="HorizontalContentAlignment" Value="Center"/>
+            <Setter Property="VerticalContentAlignment" Value="Center"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border Background="Transparent" BorderThickness="0" BorderBrush="Transparent">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style x:Key="FieldIconImage" TargetType="Image">
+            <Setter Property="Stretch" Value="Uniform"/>
+        </Style>
+    </UserControl.Resources>
+    <Grid ShowGridLines="False">
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="252"/>
+            <ColumnDefinition/>
+        </Grid.ColumnDefinitions>
+
+        <!-- Left Panel: Mapping List -->
+        <Border Padding="15" Background="#f5f5f5" BorderBrush="#d0d0d0" BorderThickness="0,0,1,0" HorizontalAlignment="Center" Width="250">
+            <StackPanel Orientation="Vertical">
+                <TextBlock FontSize="13" FontWeight="SemiBold" Foreground="#333" Margin="0,0,0,10"><Run Text="Client Mappings"/></TextBlock>
+
+                <ListBox x:Name="MappingListBox"
+                     ItemsSource="{Binding AvailableMappings}"
+                     SelectedItem="{Binding SelectedMapping, UpdateSourceTrigger=PropertyChanged}"
+                     FontSize="11"
+                     Height="200"
+                     Margin="0,0,0,10"/>
+
+                <StackPanel>
+                    <Button Content="New" Command="{Binding NewMappingCommand}" Style="{StaticResource PrimaryButton}" Height="32" FontSize="11" Margin="0,0,0,8"/>
+                    <Button Content="Edit" Command="{Binding EditMappingCommand}" Style="{StaticResource PrimaryButton}" Background="#107c10" Height="32" FontSize="11" Margin="0,0,0,8"/>
+                    <Button Content="Deploy" Command="{Binding DeployMappingCommand}" Style="{StaticResource PrimaryButton}" Background="#7fba00" Height="32" FontSize="11" Margin="0,0,0,8"/>
+                    <Button Content="Delete" Command="{Binding DeleteMappingCommand}" Style="{StaticResource PrimaryButton}" Background="#d13438" Height="32" FontSize="11"/>
+                </StackPanel>
+            </StackPanel>
+        </Border>
+
+        <!-- Right Panel: Mapping Details -->
+        <ScrollViewer Grid.Column="1" VerticalScrollBarVisibility="Auto">
+            <Border Padding="20,10,20,9" Height="653" Margin="0,0,0,-1">
+                <StackPanel Orientation="Vertical" Height="615">
+                    <!-- Status Message -->
+                    <TextBlock FontSize="12" Foreground="#666" TextWrapping="Wrap" Text="{Binding StatusMessage}" Margin="0,0,0,5"/>
+
+                    <!-- Client Identity Section -->
+                    <StackPanel Orientation="Vertical" Margin="0,0,0,5" IsEnabled="{Binding IsEditing}">
+                        <TextBlock FontSize="12" FontWeight="SemiBold" Foreground="#333"><Run Text="Client Identity"/></TextBlock>
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="118"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="130"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                            </Grid.RowDefinitions>
+
+                            <TextBlock Grid.Row="0" Grid.Column="0" Text="Org ID:" VerticalAlignment="Center" FontSize="11"/>
+                            <TextBox Grid.Row="0" Grid.Column="1" Text="{Binding ClientId, UpdateSourceTrigger=PropertyChanged}" Padding="8" FontSize="11" Margin="10,8,0,0"/>
+
+                            <TextBlock Grid.Row="0" Grid.Column="2" Text="Sender Domain:" VerticalAlignment="Center" Margin="5,8,0,0" FontSize="11"/>
+                            <TextBox Grid.Row="0" Grid.Column="3" Text="{Binding SenderDomain, UpdateSourceTrigger=PropertyChanged}" Padding="8" FontSize="11" Margin="10,8,0,0"/>
+                            </Grid>
+                    </StackPanel>
+
+                    <!-- FIX Predefined Fields Section -->
+                    <StackPanel Orientation="Vertical" Margin="0,0,0,8" IsEnabled="{Binding IsEditing}">
+                        <TextBlock FontSize="12" FontWeight="SemiBold" Foreground="#333" Text="FIX Session Parameters"/>
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="118"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="130"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                            </Grid.RowDefinitions>
+
+                            <!-- SenderCompID (Tag 49) -->
+                            <TextBlock Grid.Row="0" Grid.Column="0" Text="SenderCompID (49):" VerticalAlignment="Center" FontSize="11"/>
+                            <TextBox Grid.Row="0" Grid.Column="1" Margin="10,8,0,0" Text="{Binding SenderCompId, UpdateSourceTrigger=PropertyChanged}" Padding="8" FontSize="11"/>
+                            
+                            <!-- TargetCompID (Tag 56) -->
+                            <TextBlock Grid.Row="0" Grid.Column="2" Text="TargetCompID (56):" VerticalAlignment="Center" FontSize="11" Margin="5,8,0,0"/>
+                            <TextBox Grid.Row="0" Grid.Column="3" Margin="10,8,0,0" Text="{Binding TargetCompId, UpdateSourceTrigger=PropertyChanged}" Padding="8" FontSize="11"/>
+                          
+                            <!-- TargetSubID (Tag 57) -->
+                            <TextBlock Grid.Row="1" Grid.Column="0" Text="TargetSubID (57):" VerticalAlignment="Center" FontSize="11" Margin="0,8,0,0"/>
+                            <TextBox Grid.Row="1" Grid.Column="1" Margin="10,8,0,0" Text="{Binding TargetSubId, UpdateSourceTrigger=PropertyChanged}" Padding="8" FontSize="11"/>
+
+                            <!-- OnBehalfOfCompID (Tag 115) -->
+                            <TextBlock Grid.Row="1" Grid.Column="2" Text="OnBehalfOfCompID (115):" VerticalAlignment="Center" FontSize="11" Margin="5,8,-3,0"/>
+                            <TextBox Grid.Row="1" Grid.Column="3" Margin="10,8,0,0" Text="{Binding OnBehalfOfCompId, UpdateSourceTrigger=PropertyChanged}" Padding="8" FontSize="11"/>
+
+                            <!-- DeliverToCompID (Tag 128) -->
+                            <TextBlock Grid.Row="2" Grid.Column="0" Text="DeliverToCompID (128):" VerticalAlignment="Center" FontSize="11" Margin="0,8,0,0"/>
+                            <TextBox Grid.Row="2   " Grid.Column="1" Margin="10,8,0,0" Text="{Binding DeliverToCompId, UpdateSourceTrigger=PropertyChanged}" Padding="8" FontSize="11"/>
+                        </Grid>
+                    </StackPanel>
+
+                    <!-- Field Mappings Section -->
+                    <StackPanel Orientation="Vertical" Margin="0,5,0,1" Height="292">
+                        <TextBlock FontSize="12" FontWeight="SemiBold" Foreground="#333"><Run Text="Trade Allocation Field Mappings ("/><Run Text="{Binding FieldMappings.Count, Mode=OneWay}"/><Run Text=" fields)"/></TextBlock>
+
+                        <ListBox ItemsSource="{Binding FieldMappings}"
+                             SelectedItem="{Binding SelectedFieldMapping}"
+                             Height="200"
+                             FontSize="11" av:ItemsSource="{av:SampleData ItemCount=5}">
+                            <ListBox.ItemTemplate>
+                                <DataTemplate>
+                                    <Border Padding="8" BorderBrush="#e0e0e0" BorderThickness="0,0,0,1">
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="Auto"/>
+                                                <ColumnDefinition Width="*"/>
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock Grid.Column="0" Foreground="#666" MinWidth="120">
+                                                <Run Text="Tag "/>
+                                                <Run Text="{Binding Value, Mode=OneWay}" FontWeight="SemiBold"/>
+                                            </TextBlock>
+                                            <TextBlock Grid.Column="1" FontWeight="SemiBold" Foreground="#333" Margin="10,0,0,0" Text="{Binding Key, Mode=OneWay}"/>
+                                        </Grid>
+                                    </Border>
+                                </DataTemplate>
+                            </ListBox.ItemTemplate>
+                        </ListBox>
+
+                        <!-- Add/Edit/Delete Field Section (only when editing) -->
+                        <Border BorderBrush="#d0d0d0" BorderThickness="1" Padding="5" Background="#f9f9f9" Margin="0,0,0,10" Visibility="{Binding IsEditing, Converter={StaticResource BoolToVisibilityConverter}}">
+                            <StackPanel Orientation="Vertical">
+                                <TextBlock FontSize="12" FontWeight="SemiBold" Foreground="#333" Width="450" Text="Add / Edit Field" HorizontalAlignment="Left"/>
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto" MinWidth="188.513"/>
+                                        <ColumnDefinition Width="277.512"/>
+                                        <ColumnDefinition/>
+                                    </Grid.ColumnDefinitions>
+
+                                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,10,0,0" Width="146">
+                                        <Button ToolTip="Add"
+                                                Command="{Binding AddFieldCommand}"
+                                                Style="{StaticResource FieldIconButton}"
+                                                Width="44"
+                                                Height="44"
+                                                Padding="6"
+                                                Margin="0,0,8,0">
+                                            <Image Height="34" Width="34">
+                                                <Image.Style>
+                                                    <Style TargetType="Image" BasedOn="{StaticResource FieldIconImage}">
+                                                        <Setter Property="Source" Value="{StaticResource AddIconBitmap}"/>
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding IsEnabled, RelativeSource={RelativeSource AncestorType=Button}}" Value="False">
+                                                                <Setter Property="Source" Value="{StaticResource AddIconBitmapGray}"/>
+                                                                <Setter Property="Opacity" Value="0.7"/>
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </Image.Style>
+                                            </Image>
+                                        </Button>
+                                        <Button ToolTip="Update"
+                                                Command="{Binding UpdateFieldCommand}"
+                                                Style="{StaticResource FieldIconButton}"
+                                                Width="44"
+                                                Height="44"
+                                                Padding="6"
+                                                IsEnabled="{Binding CanUpdateField}"
+                                                Margin="0,0,8,0">
+                                            <Image Height="34" Width="34">
+                                                <Image.Style>
+                                                    <Style TargetType="Image" BasedOn="{StaticResource FieldIconImage}">
+                                                        <Setter Property="Source" Value="{StaticResource UpdateIconBitmap}"/>
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding IsEnabled, RelativeSource={RelativeSource AncestorType=Button}}" Value="False">
+                                                                <Setter Property="Source" Value="{StaticResource UpdateIconBitmapGray}"/>
+                                                                <Setter Property="Opacity" Value="0.7"/>
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </Image.Style>
+                                            </Image>
+                                        </Button>
+                                        <Button ToolTip="Delete"
+                                                Command="{Binding RemoveFieldCommand}"
+                                                Style="{StaticResource FieldIconButton}"
+                                                Width="44"
+                                                Height="44"
+                                                Padding="6"
+                                                Margin="0,0,0,0"
+                                                Visibility="{Binding IsEditing, Converter={StaticResource BoolToVisibilityConverter}}">
+                                            <Image RenderTransformOrigin="0.95,0.49" HorizontalAlignment="Left">
+                                                <Image.Style>
+                                                    <Style TargetType="Image" BasedOn="{StaticResource FieldIconImage}">
+                                                        <Setter Property="Source" Value="{StaticResource DeleteIconBitmap}"/>
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding IsEnabled, RelativeSource={RelativeSource AncestorType=Button}}" Value="False">
+                                                                <Setter Property="Source" Value="{StaticResource DeleteIconBitmapGray}"/>
+                                                                <Setter Property="Opacity" Value="0.7"/>
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </Image.Style>
+                                            </Image>
+                                        </Button>
+                                    </StackPanel>
+                                    <StackPanel Orientation="Vertical" RenderTransformOrigin="0.5,0.5" Margin="13,0,82,-1" Grid.Column="1">
+                                        <StackPanel.RenderTransform>
+                                            <TransformGroup>
+                                                <ScaleTransform/>
+                                                <SkewTransform AngleY="-0.355"/>
+                                                <RotateTransform/>
+                                                <TranslateTransform Y="0.527"/>
+                                            </TransformGroup>
+                                        </StackPanel.RenderTransform>
+                                        <TextBlock FontSize="10" Foreground="#555" Width="200"><Run Text="Tag ID"/></TextBlock>
+                                        <TextBox Text="{Binding NewFieldTag, UpdateSourceTrigger=PropertyChanged}" Padding="9" FontSize="11" HorizontalAlignment="Left" Width="78"/>
+                                    </StackPanel>
+                                    <StackPanel Grid.Column="1" Orientation="Vertical" Margin="108,0,-11,0" Grid.ColumnSpan="2">
+                                        <TextBlock FontSize="10" Foreground="#555"><Run Text="Column Name"/></TextBlock>
+                                        <TextBox Text="{Binding NewFieldName, UpdateSourceTrigger=PropertyChanged}" Padding="9" FontSize="11" HorizontalAlignment="Left" Width="175"/>
+                                    </StackPanel>
+                                </Grid>
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
+
+                    <!-- Required tags warning -->
+                    <Border Visibility="{Binding IsEditing, Converter={StaticResource BoolToVisibilityConverter}}">
+                        <TextBlock FontSize="11"
+                                   Foreground="#d13438"
+                                   TextWrapping="Wrap"
+                                   Margin="0,0,0,5"
+                                   Text="{Binding MissingRequiredTagsMessage}"
+                                   Visibility="{Binding MissingRequiredTagsMessage, Converter={StaticResource StringToVisibilityConverter}}"/>
+                    </Border>
+
+                    <!-- Action Buttons -->
+                    <StackPanel Orientation="Horizontal" Margin="0,0,0,0" Height="37">
+                        <Button Content="Save" 
+                            Command="{Binding SaveMappingCommand}"
+                            Style="{StaticResource PrimaryButton}"
+                            Background="#107c10"
+                            Height="36"
+                            Margin="2,0,10,0"
+                            Visibility="{Binding IsEditing, Converter={StaticResource BoolToVisibilityConverter}}"/>
+                        <Button Content="Cancel" 
+                            Command="{Binding CancelCommand}"
+                            Style="{StaticResource PrimaryButton}"
+                            Background="#d13438"
+                            Height="36"
+                            Visibility="{Binding IsEditing, Converter={StaticResource BoolToVisibilityConverter}}"/>
+                    </StackPanel>
+                </StackPanel>
+            </Border>
+        </ScrollViewer>
+    </Grid>
+</UserControl>
+
