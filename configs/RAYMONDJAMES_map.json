@@ -1,21 +1,17 @@
 {
-  "ClientId": "RAYMONDJAMES",
-  "SenderDomain": "rjf.local",
-  "TargetSubID": "RJSYN",
-  "AllocTransType": "0",
-  "OnBehalfOfCompID": "RJSYN",
-  "DeliverToCompID": "RAYJALLOC",
-  "FieldMap": {
-    "BROKER": "56",
+  "clientId": "RAYMONDJAMES",
+  "senderDomain": "7mcchy.onmicrosoft.com",
+  "predefined": {
+    "49": "RAYMONDJAMES",
+    "56": "RJSYN"
+  },
+  "tradeAllocations": {
     "TRADE DATE": "75",
     "ORDER": "54",
-    "RIC": "55",
+    "SECURITY": "55",
     "CUSIP": "48",
-    "ISIN": "48",
-    "SEDOL": "48",
-    "ALLOC ACCOUNT": "79",
+    "CUSTODIAN ID": "79",
     "QUANTITY": "80",
     "PRICE": "153"
   }
 }
-
