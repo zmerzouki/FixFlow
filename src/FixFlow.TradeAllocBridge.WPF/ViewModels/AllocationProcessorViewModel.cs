@@ -447,7 +447,8 @@ namespace FixFlow.TradeAllocBridge.WPF.ViewModels
 
         private async void Process()
         {
-            if (!SelectedClient.HasValue || string.IsNullOrEmpty(SelectedFilePath))
+            var selectedClient = SelectedClient;
+            if (!selectedClient.HasValue || string.IsNullOrEmpty(SelectedFilePath))
             {
                 StatusMessage = "Please select a client and a file.";
                 return;
@@ -467,7 +468,13 @@ namespace FixFlow.TradeAllocBridge.WPF.ViewModels
 
             try
             {
-                var clientId = SelectedClient.Value.Key;
+                if (!selectedClient.HasValue)
+                {
+                    StatusMessage = "Please select a client and a file.";
+                    return;
+                }
+
+                var clientId = selectedClient.Value.Key;
                 var mapPath = Path.Combine(_mappingRepo.BaseDirectory, $"{clientId}_map.json");
 
                 if (!File.Exists(mapPath))
@@ -698,6 +705,7 @@ namespace FixFlow.TradeAllocBridge.WPF.ViewModels
                         {
                             AllocId = allocId,
                             Symbol = symbol,
+                            Side = side,
                             TradeCount = symbolGroup.Count(),
                             RawFix = mergedMsg.ToString().Replace('\u0001', '|'),
                             Status = sendResult == "OK" ? "Sent" : "Failed",

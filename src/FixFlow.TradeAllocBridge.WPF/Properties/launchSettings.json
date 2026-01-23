@@ -1,0 +1,11 @@
+{
+  "profiles": {
+    "FixFlow.TradeAllocBridge.WPF": {
+      "commandName": "Project",
+      "environmentVariables": {
+        "FIXFLOW_CLI_CONFIGS": ""
+      },
+      "jsWebView2Debugging": true
+    }
+  }
+}

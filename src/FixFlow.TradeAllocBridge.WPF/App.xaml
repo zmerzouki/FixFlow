@@ -27,5 +27,8 @@
         <!-- Converters -->
         <converters:BoolToVisibilityConverter x:Key="BoolToVisibilityConverter" />
         <converters:StringToVisibilityConverter x:Key="StringToVisibilityConverter" />
+        <converters:TagLevelConverter x:Key="TagLevelConverter" />
+        <converters:TagDisplayConverter x:Key="TagDisplayConverter" />
+        <converters:SideDisplayConverter x:Key="SideDisplayConverter" />
     </Application.Resources>
 </Application>

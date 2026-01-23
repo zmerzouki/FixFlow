@@ -8,6 +8,7 @@
     <RootNamespace>FixFlow.TradeAllocBridge.WPF</RootNamespace>
     <AssemblyName>FixFlow.TradeAllocBridge.WPF</AssemblyName>
     <NoWarn>$(NoWarn);NU1608;NU1701</NoWarn>
+    <ApplicationIcon>Resources\FxF.ico</ApplicationIcon>
   </PropertyGroup>
 
   <ItemGroup>
@@ -38,5 +39,6 @@
 
   <ItemGroup>
     <Resource Include="Resources\Icons\*.png" />
+    <Resource Include="Resources\FxF.ico" />
   </ItemGroup>
 </Project>

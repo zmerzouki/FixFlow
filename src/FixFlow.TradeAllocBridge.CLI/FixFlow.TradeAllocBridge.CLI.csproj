@@ -20,4 +20,8 @@
     <None Include="configs\**\*.*" CopyToOutputDirectory="Always" />
   </ItemGroup>
 
+  <ItemGroup>
+    <Folder Include="Services\" />
+  </ItemGroup>
+
 </Project>
