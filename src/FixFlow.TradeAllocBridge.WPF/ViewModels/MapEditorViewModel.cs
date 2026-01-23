@@ -36,6 +36,7 @@ namespace FixFlow.TradeAllocBridge.WPF.ViewModels
         private ObservableCollection<FixMessageResult> _testResults;
         private bool _hasUnsavedChanges;
         private bool _suppressChangeTracking;
+        private string _incomingFolderPath = string.Empty;
         private const string DefaultClientIdPlaceholder = "CLIENT1";
         private const string DefaultSenderDomainPlaceholder = "ACME.COM";
         private const string DefaultSenderCompIdPlaceholder = "FIXFLOW";
@@ -85,6 +86,8 @@ namespace FixFlow.TradeAllocBridge.WPF.ViewModels
         public ICommand AddFieldCommand { get; }
         public ICommand UpdateFieldCommand { get; }
         public ICommand RemoveFieldCommand { get; }
+        public ICommand MoveFieldUpCommand { get; }
+        public ICommand MoveFieldDownCommand { get; }
         public ICommand TestMappingCommand { get; }
         public ICommand DeployMappingCommand { get; }
 
@@ -110,6 +113,8 @@ namespace FixFlow.TradeAllocBridge.WPF.ViewModels
             AddFieldCommand = new RelayCommand(AddField, () => CanAddField);
             UpdateFieldCommand = new RelayCommand(UpdateField, () => CanUpdateField);
             RemoveFieldCommand = new RelayCommand(RemoveField, () => SelectedFieldMapping != null);
+            MoveFieldUpCommand = new RelayCommand(MoveFieldUp, () => CanMoveFieldUp);
+            MoveFieldDownCommand = new RelayCommand(MoveFieldDown, () => CanMoveFieldDown);
             TestMappingCommand = new RelayCommand(TestMapping, () => !IsEditing && SelectedMapping != null);
             DeployMappingCommand = new RelayCommand(DeployMapping, () => !IsEditing && SelectedMapping != null);
 
@@ -171,7 +176,7 @@ namespace FixFlow.TradeAllocBridge.WPF.ViewModels
                     DeliverToCompId = _currentMapping.Predefined?.DeliverToCompID ?? string.Empty;
 
                     FieldMappings.Clear();
-                    foreach (var kvp in _currentMapping.TradeAllocations.OrderBy(x => x.Key))
+                    foreach (var kvp in _currentMapping.TradeAllocations)
                     {
                         FieldMappings.Add(new KeyValuePair<string, string>(kvp.Key, kvp.Value));
                     }
@@ -329,6 +334,19 @@ namespace FixFlow.TradeAllocBridge.WPF.ViewModels
             }
         }
 
+        public string IncomingFolderPath
+        {
+            get => _incomingFolderPath;
+            set
+            {
+                if (_incomingFolderPath != value)
+                {
+                    _incomingFolderPath = value;
+                    OnPropertyChanged(nameof(IncomingFolderPath));
+                }
+            }
+        }
+
         public string NewFieldName
         {
             get => _newFieldName;
@@ -436,6 +454,57 @@ namespace FixFlow.TradeAllocBridge.WPF.ViewModels
         {
             OnPropertyChanged(nameof(CanAddField));
             OnPropertyChanged(nameof(CanUpdateField));
+            OnPropertyChanged(nameof(CanMoveFieldUp));
+            OnPropertyChanged(nameof(CanMoveFieldDown));
+            CommandManager.InvalidateRequerySuggested();
+        }
+
+        private int GetSelectedFieldIndex()
+        {
+            if (!SelectedFieldMapping.HasValue)
+            {
+                return -1;
+            }
+
+            var selected = SelectedFieldMapping.Value;
+            for (var i = 0; i < FieldMappings.Count; i++)
+            {
+                var item = FieldMappings[i];
+                if (string.Equals(item.Key, selected.Key, StringComparison.OrdinalIgnoreCase) &&
+                    string.Equals(item.Value, selected.Value, StringComparison.OrdinalIgnoreCase))
+                {
+                    return i;
+                }
+            }
+
+            return -1;
+        }
+
+        private void MoveFieldUp()
+        {
+            var index = GetSelectedFieldIndex();
+            if (index <= 0) return;
+
+            var item = FieldMappings[index];
+            FieldMappings.RemoveAt(index);
+            FieldMappings.Insert(index - 1, item);
+            SelectedFieldMapping = FieldMappings[index - 1];
+            MarkDirty();
+            OnPropertyChanged(nameof(CanSave));
+            CommandManager.InvalidateRequerySuggested();
+        }
+
+        private void MoveFieldDown()
+        {
+            var index = GetSelectedFieldIndex();
+            if (index < 0 || index >= FieldMappings.Count - 1) return;
+
+            var item = FieldMappings[index];
+            FieldMappings.RemoveAt(index);
+            FieldMappings.Insert(index + 1, item);
+            SelectedFieldMapping = FieldMappings[index + 1];
+            MarkDirty();
+            OnPropertyChanged(nameof(CanSave));
             CommandManager.InvalidateRequerySuggested();
         }
 
@@ -443,6 +512,9 @@ namespace FixFlow.TradeAllocBridge.WPF.ViewModels
             FieldMappings.Any(f => string.Equals(f.Value?.Trim(), tag, StringComparison.OrdinalIgnoreCase)));
 
         public bool CanSave => IsEditing && !string.IsNullOrWhiteSpace(ClientId) && FieldMappings.Count > 0 && HasRequiredTags;
+
+        public bool CanMoveFieldUp => IsEditing && GetSelectedFieldIndex() > 0;
+        public bool CanMoveFieldDown => IsEditing && GetSelectedFieldIndex() >= 0 && GetSelectedFieldIndex() < FieldMappings.Count - 1;
 
         public ObservableCollection<FixMessageResult> TestResults
         {
@@ -473,25 +545,34 @@ namespace FixFlow.TradeAllocBridge.WPF.ViewModels
         private void NewMapping()
         {
             _suppressChangeTracking = true;
+            var wpfPredefinedDefaults = TryLoadWpfPredefinedDefaults();
+            var defaultSenderCompId = wpfPredefinedDefaults?.SenderCompID ?? string.Empty;
+            var defaultTargetCompId = wpfPredefinedDefaults?.TargetCompID ?? string.Empty;
+            var defaultTargetSubId = wpfPredefinedDefaults?.TargetSubID ?? string.Empty;
+            var defaultOnBehalfOfCompId = wpfPredefinedDefaults?.OnBehalfOfCompID ?? string.Empty;
+            var defaultDeliverToCompId = wpfPredefinedDefaults?.DeliverToCompID ?? string.Empty;
             _currentMapping = new MappingConfig
             {
                 ClientId = string.Empty,
                 SenderDomain = string.Empty,
                 Predefined = new PredefinedFields
                 {
-                    SenderCompID = string.Empty,
-                    TargetCompID = string.Empty
+                    SenderCompID = defaultSenderCompId,
+                    TargetCompID = defaultTargetCompId,
+                    TargetSubID = string.IsNullOrWhiteSpace(defaultTargetSubId) ? null : defaultTargetSubId,
+                    OnBehalfOfCompID = string.IsNullOrWhiteSpace(defaultOnBehalfOfCompId) ? null : defaultOnBehalfOfCompId,
+                    DeliverToCompID = string.IsNullOrWhiteSpace(defaultDeliverToCompId) ? null : defaultDeliverToCompId
                 },
                 TradeAllocations = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
             };
 
             _isProgrammaticSenderCompSet = true;
-            SenderCompId = string.Empty;
+            SenderCompId = defaultSenderCompId;
             _isProgrammaticSenderCompSet = false;
-            TargetCompId = string.Empty;
-            TargetSubId = string.Empty;
-            OnBehalfOfCompId = string.Empty;
-            DeliverToCompId = string.Empty;
+            TargetCompId = defaultTargetCompId;
+            TargetSubId = defaultTargetSubId;
+            OnBehalfOfCompId = defaultOnBehalfOfCompId;
+            DeliverToCompId = defaultDeliverToCompId;
             FieldMappings.Clear();
             var defaults = new[]
             {
@@ -521,6 +602,88 @@ namespace FixFlow.TradeAllocBridge.WPF.ViewModels
             _suppressChangeTracking = false;
             _hasUnsavedChanges = true;
             StatusMessage = "Creating new mapping...";
+        }
+
+        private PredefinedFields? TryLoadWpfPredefinedDefaults()
+        {
+            try
+            {
+                var appSettingsPath = ResolveWpfAppSettingsPath();
+                if (string.IsNullOrWhiteSpace(appSettingsPath) || !File.Exists(appSettingsPath))
+                {
+                    return null;
+                }
+
+                var json = File.ReadAllText(appSettingsPath);
+                using var doc = JsonDocument.Parse(json);
+                if (!doc.RootElement.TryGetProperty("Fix", out var fixElement) ||
+                    fixElement.ValueKind != JsonValueKind.Object)
+                {
+                    return null;
+                }
+
+                var predefined = new PredefinedFields
+                {
+                    SenderCompID = GetFixSetting(fixElement, "49"),
+                    TargetCompID = GetFixSetting(fixElement, "56"),
+                    TargetSubID = GetFixSetting(fixElement, "57"),
+                    OnBehalfOfCompID = GetFixSetting(fixElement, "115"),
+                    DeliverToCompID = GetFixSetting(fixElement, "128")
+                };
+
+                if (string.IsNullOrWhiteSpace(predefined.SenderCompID) &&
+                    string.IsNullOrWhiteSpace(predefined.TargetCompID) &&
+                    string.IsNullOrWhiteSpace(predefined.TargetSubID) &&
+                    string.IsNullOrWhiteSpace(predefined.OnBehalfOfCompID) &&
+                    string.IsNullOrWhiteSpace(predefined.DeliverToCompID))
+                {
+                    return null;
+                }
+
+                return predefined;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to load FIX defaults from WPF appsettings.");
+                return null;
+            }
+        }
+
+        private static string GetFixSetting(JsonElement fixElement, string key)
+        {
+            if (fixElement.TryGetProperty(key, out var valueElement))
+            {
+                var value = valueElement.ValueKind switch
+                {
+                    JsonValueKind.String => valueElement.GetString(),
+                    JsonValueKind.Number => valueElement.GetRawText(),
+                    JsonValueKind.True => "true",
+                    JsonValueKind.False => "false",
+                    _ => null
+                };
+
+                return value?.Trim() ?? string.Empty;
+            }
+
+            return string.Empty;
+        }
+
+        private static string? ResolveWpfAppSettingsPath()
+        {
+            var baseDir = AppContext.BaseDirectory;
+            var solutionRoot = FindAncestorWithFile(baseDir, "*.sln", maxLevels: 8);
+            if (string.IsNullOrWhiteSpace(solutionRoot))
+            {
+                return null;
+            }
+
+            var wpfAppSettings = Path.Combine(solutionRoot, "src", "FixFlow.TradeAllocBridge.WPF", "appsettings.json");
+            if (File.Exists(wpfAppSettings))
+            {
+                return wpfAppSettings;
+            }
+
+            return null;
         }
 
         private void EditMapping()
@@ -947,7 +1110,6 @@ namespace FixFlow.TradeAllocBridge.WPF.ViewModels
             {
                 var filename = $"{SelectedMapping}_map.json";
                 var sourcePath = Path.Combine(_configDir, filename);
-                var cliPath = Path.Combine(_cliConfigsDir, filename);
 
                 if (!File.Exists(sourcePath))
                 {
@@ -963,17 +1125,71 @@ namespace FixFlow.TradeAllocBridge.WPF.ViewModels
                     return;
                 }
 
-                Directory.CreateDirectory(_cliConfigsDir);
-                if (!TryDeployMappingCopy(sourcePath, cliPath, out var deployError))
+                // Destination: staging/incoming folder inside the CLI configs folder
+                var incomingDir = Path.Combine(_cliConfigsDir, "incoming");
+                Directory.CreateDirectory(incomingDir);
+
+                var incomingPath = Path.Combine(incomingDir, filename);
+                var tempFile = Path.Combine(incomingDir, $"{filename}.{Guid.NewGuid():N}.tmp");
+
+                // Copy via a temp file in the incoming folder to avoid writing directly into the CLI's active file.
+                using (var srcStream = new FileStream(sourcePath, FileMode.Open, FileAccess.Read, FileShare.Read))
+                using (var destStream = new FileStream(tempFile, FileMode.CreateNew, FileAccess.Write, FileShare.None))
                 {
-                    StatusMessage = $"Failed to deploy mapping: {deployError}";
+                    srcStream.CopyTo(destStream);
+                }
+
+                // Try to atomically move/replace the temp file into the incoming filename.
+                var deployed = false;
+                const int maxAttempts = 6;
+                const int delayMs = 200;
+                for (int attempt = 1; attempt <= maxAttempts && !deployed; attempt++)
+                {
+                    try
+                    {
+                        if (File.Exists(incomingPath))
+                        {
+                            File.Replace(tempFile, incomingPath, null);
+                        }
+                        else
+                        {
+                            File.Move(tempFile, incomingPath);
+                        }
+
+                        deployed = true;
+                    }
+                    catch (IOException ioEx) when (attempt < maxAttempts)
+                    {
+                        _logger.LogWarning(ioEx, "Attempt {Attempt} to stage mapping {ClientId} to incoming folder failed; retrying...", attempt, SelectedMapping);
+                        Thread.Sleep(delayMs);
+                    }
+                    catch (UnauthorizedAccessException uaEx) when (attempt < maxAttempts)
+                    {
+                        _logger.LogWarning(uaEx, "Attempt {Attempt} to stage mapping {ClientId} to incoming folder failed (access); retrying...", attempt, SelectedMapping);
+                        Thread.Sleep(delayMs);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogError(ex, "Failed to stage mapping {ClientId}", SelectedMapping);
+                        break;
+                    }
+                }
+
+                if (!deployed)
+                {
+                    try { if (File.Exists(tempFile)) File.Delete(tempFile); } catch { /* best-effort cleanup */ }
+                    StatusMessage = $"Failed to stage mapping: incoming file is in use. Close any process using '{incomingDir}' and try again.";
+                    _logger.LogError("Failed to stage mapping {ClientId} into incoming folder {IncomingDir}", SelectedMapping, incomingDir);
                     return;
                 }
 
+                // Optionally update CLI cfg session entries (keeps CLI session config attempts in sync)
                 UpdateCliSessionConfigFile(testMapping);
 
-                StatusMessage = $"Mapping '{SelectedMapping}' deployed to email attachment processing service";
-                _logger.LogInformation("Deployed mapping: {ClientId} to {Path}", SelectedMapping, cliPath);
+                // Expose incoming path to UI for user verification
+                IncomingFolderPath = incomingPath;
+                StatusMessage = $"Mapping '{SelectedMapping}' staged to incoming folder: {incomingPath}";
+                _logger.LogInformation("Staged mapping: {ClientId} to {Path}", SelectedMapping, incomingPath);
             }
             catch (Exception ex)
             {
@@ -1400,25 +1616,23 @@ namespace FixFlow.TradeAllocBridge.WPF.ViewModels
         {
             const string envVar = "FIXFLOW_CLI_CONFIGS";
 
+            // 0) environment override
             try
             {
                 var env = Environment.GetEnvironmentVariable(envVar);
                 if (!string.IsNullOrWhiteSpace(env) && Directory.Exists(env))
-                {
                     return Path.GetFullPath(env);
-                }
             }
-            catch { /* ignore environment access issues and continue to other strategies */ }
+            catch { /* ignore and continue */ }
 
             var baseDir = AppContext.BaseDirectory;
 
-            // 1) attempt to discover solution root and look specifically for the CLI project folder
-            var solutionRoot = FindAncestorWithFile(baseDir, "*.sln", maxLevels: 8);
-            if (!string.IsNullOrEmpty(solutionRoot))
+            // 1) Prefer an explicit CLI project folder under the solution (keeps WPF from picking its own configs)
+            try
             {
-                try
+                var solutionRoot = FindAncestorWithFile(baseDir, "*.sln", maxLevels: 8);
+                if (!string.IsNullOrWhiteSpace(solutionRoot))
                 {
-                    // Prefer the known project folder name to avoid picking up the WPF 'configs' folder.
                     var expectedCliProj = Path.Combine(solutionRoot, "src", "FixFlow.TradeAllocBridge.CLI");
                     if (Directory.Exists(expectedCliProj))
                     {
@@ -1434,15 +1648,32 @@ namespace FixFlow.TradeAllocBridge.WPF.ViewModels
                                 {
                                     var configsDir = Path.Combine(tfmDir, "configs");
                                     if (Directory.Exists(configsDir))
-                                    {
                                         return Path.GetFullPath(configsDir);
-                                    }
                                 }
                             }
                         }
                     }
+                }
+            }
+            catch { /* continue to other strategies */ }
 
-                    // Fallback: search for any project folder that contains "CLI" (existing behavior)
+            // 2) Local/nearby 'configs' (legacy heuristics)
+            try
+            {
+                var candidate = Path.Combine(baseDir, "configs");
+                if (Directory.Exists(candidate)) return Path.GetFullPath(candidate);
+
+                candidate = Path.GetFullPath(Path.Combine(baseDir, "..", "configs"));
+                if (Directory.Exists(candidate)) return candidate;
+            }
+            catch { /* continue */ }
+
+            // 3) Search src/*CLI* as fallback (if solution layout differs)
+            try
+            {
+                var solutionRoot = FindAncestorWithFile(baseDir, "*.sln", maxLevels: 8);
+                if (!string.IsNullOrWhiteSpace(solutionRoot))
+                {
                     var srcDir = Path.Combine(solutionRoot, "src");
                     if (Directory.Exists(srcDir))
                     {
@@ -1461,29 +1692,16 @@ namespace FixFlow.TradeAllocBridge.WPF.ViewModels
                                 {
                                     var configsDir = Path.Combine(tfmDir, "configs");
                                     if (Directory.Exists(configsDir))
-                                    {
                                         return Path.GetFullPath(configsDir);
-                                    }
                                 }
                             }
                         }
                     }
                 }
-                catch { /* discovery failed, continue to next fallback */ }
             }
+            catch { /* ignore */ }
 
-            // 2) app's local sibling 'configs' or parent 'configs'
-            try
-            {
-                var candidate = Path.Combine(baseDir, "configs");
-                if (Directory.Exists(candidate)) return Path.GetFullPath(candidate);
-
-                candidate = Path.GetFullPath(Path.Combine(baseDir, "..", "configs"));
-                if (Directory.Exists(candidate)) return candidate;
-            }
-            catch { /* continue */ }
-
-            // 3) limited upward search for any 'configs' folder
+            // 4) Upward search for any 'configs' folder
             try
             {
                 var di = new DirectoryInfo(baseDir);
@@ -1495,7 +1713,7 @@ namespace FixFlow.TradeAllocBridge.WPF.ViewModels
             }
             catch { }
 
-            // 4) fallback to per-user AppData
+            // 5) Fallback to per-user AppData
             try
             {
                 var appData = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "FixFlow", "configs");
@@ -1504,7 +1722,7 @@ namespace FixFlow.TradeAllocBridge.WPF.ViewModels
             }
             catch
             {
-                // last resort: use base directory
+                // last resort
                 return baseDir;
             }
         }
@@ -1530,6 +1748,7 @@ namespace FixFlow.TradeAllocBridge.WPF.ViewModels
     {
         public string AllocId { get; set; } = string.Empty;
         public string Symbol { get; set; } = string.Empty;
+        public string Side { get; set; } = string.Empty;
         public int TradeCount { get; set; }
         public string RawFix { get; set; } = string.Empty;
         public string Status { get; set; } = string.Empty;

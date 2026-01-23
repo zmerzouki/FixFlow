@@ -15,6 +15,8 @@ using FixFlow.TradeAllocBridge.Core.Reporting;
 using Serilog;
 using System.Runtime.Versioning;
 using FixMessage = QuickFix.Message;
+using FixFlow.TradeAllocBridge.CLI.Services; // <- added
+using System.IO;
 
 [assembly: SupportedOSPlatform("windows7.0")]
 
@@ -59,7 +61,59 @@ namespace FixFlow.TradeAllocBridge.CLI
                 builder.Services.AddSingleton<FixClient>();
                 builder.Services.AddSingleton<ValidationReport>();
 
+                // Prepare canonical paths used by CLI
+                var baseDirCli = AppContext.BaseDirectory;
+                var activeConfigs = Path.Combine(baseDirCli, "configs");
+                var incoming = Path.Combine(activeConfigs, "incoming");
+
+                // Register FixMappingRepository for the CLI active configs directory
+                builder.Services.AddSingleton<FixMappingRepository>(sp =>
+                {
+                    var loggerRepo = sp.GetRequiredService<ILogger<FixMappingRepository>>();
+                    return new FixMappingRepository(activeConfigs, loggerRepo);
+                });
+
+                // Register the MappingStagingWatcher so CLI watches configs/incoming
+                builder.Services.AddSingleton(sp =>
+                    new MappingStagingWatcher(incoming, activeConfigs, sp.GetRequiredService<ILogger<MappingStagingWatcher>>())
+                );
+
                 using var app = builder.Build();
+
+                // Start the watcher (process existing staged files and assign callback)
+                var watcher = app.Services.GetRequiredService<MappingStagingWatcher>();
+                var mappingRepo = app.Services.GetRequiredService<FixMappingRepository>();
+                try
+                {
+                    watcher.EnqueueExisting();
+
+                    // When a mapping is successfully moved into the active configs folder,
+                    // notify the repository so in-memory consumers can reload.
+                    watcher.OnMappingDeployed = deployedPath =>
+                    {
+                        try
+                        {
+                            var logger = app.Services.GetRequiredService<ILogger<Program>>();
+                            logger.LogInformation("Watcher moved mapping into active folder: {Path}", deployedPath);
+
+                            // Notify repository that mappings changed
+                            mappingRepo.NotifyMappingsChanged();
+
+                            logger.LogInformation("Notified FixMappingRepository of mapping changes.");
+                        }
+                        catch (Exception ex)
+                        {
+                            var logger = app.Services.GetRequiredService<ILogger<Program>>();
+                            logger.LogWarning(ex, "Failed to notify mapping repository after deploy");
+                        }
+                    };
+                }
+                catch (Exception ex)
+                {
+                    // Do not block startup on watcher issues; just log
+                    var logger = app.Services.GetRequiredService<ILogger<Program>>();
+                    logger.LogWarning(ex, "Failed to initialize mapping staging watcher");
+                }
 
                 var fixEngine = app.Services.GetRequiredService<FixEngine>();
                 var emailService = app.Services.GetRequiredService<GraphEmailService>();
@@ -205,134 +259,133 @@ namespace FixFlow.TradeAllocBridge.CLI
                         Console.WriteLine($"Processing file: {Path.GetFileName(attachmentPath)}");
                         var trades = excelParser.Parse(attachmentPath);
                         var totalTrades = trades.Count;
-                        
-// -------------------------------------------------------------------
-// ? Group allocations by required fields (54,55,79,80,153)
-// -------------------------------------------------------------------
-var symbolColumn = mapping.TradeAllocations.FirstOrDefault(kvp => kvp.Value == "55").Key ?? "SYMBOL";
-var sideColumn = mapping.TradeAllocations.FirstOrDefault(kvp => kvp.Value == "54").Key ?? "SIDE";
-var accountColumn = mapping.TradeAllocations.FirstOrDefault(kvp => kvp.Value == "79").Key ?? "ALLOC ACCOUNT";
-var qtyColumn = mapping.TradeAllocations.FirstOrDefault(kvp => kvp.Value == "80").Key ?? "QUANTITY";
-var priceColumn = mapping.TradeAllocations.FirstOrDefault(kvp => kvp.Value == "153").Key ?? "PRICE";
+                        // -------------------------------------------------------------------
+                        // ? Group allocations by required fields (54,55,79,80,153)
+                        // -------------------------------------------------------------------
+                        var symbolColumn = mapping.TradeAllocations.FirstOrDefault(kvp => kvp.Value == "55").Key ?? "SYMBOL";
+                        var sideColumn = mapping.TradeAllocations.FirstOrDefault(kvp => kvp.Value == "54").Key ?? "SIDE";
+                        var accountColumn = mapping.TradeAllocations.FirstOrDefault(kvp => kvp.Value == "79").Key ?? "ALLOC ACCOUNT";
+                        var qtyColumn = mapping.TradeAllocations.FirstOrDefault(kvp => kvp.Value == "80").Key ?? "QUANTITY";
+                        var priceColumn = mapping.TradeAllocations.FirstOrDefault(kvp => kvp.Value == "153").Key ?? "PRICE";
 
-bool IsMissing(TradeRecord t, string column) =>
-    !t.Fields.TryGetValue(column, out var val) || string.IsNullOrWhiteSpace(val?.Trim());
+                        bool IsMissing(TradeRecord t, string column) =>
+                            !t.Fields.TryGetValue(column, out var val) || string.IsNullOrWhiteSpace(val?.Trim());
 
-var missingTrades = trades
-    .Where(t =>
-        IsMissing(t, symbolColumn) ||
-        IsMissing(t, sideColumn) ||
-        IsMissing(t, accountColumn) ||
-        IsMissing(t, qtyColumn) ||
-        IsMissing(t, priceColumn))
-    .ToList();
+                        var missingTrades = trades
+                            .Where(t =>
+                                IsMissing(t, symbolColumn) ||
+                                IsMissing(t, sideColumn) ||
+                                IsMissing(t, accountColumn) ||
+                                IsMissing(t, qtyColumn) ||
+                                IsMissing(t, priceColumn))
+                            .ToList();
 
-var missingTags = new List<string>();
-if (missingTrades.Any(t => IsMissing(t, sideColumn))) missingTags.Add("Side (tag 54)");
-if (missingTrades.Any(t => IsMissing(t, symbolColumn))) missingTags.Add("Symbol (tag 55)");
-if (missingTrades.Any(t => IsMissing(t, accountColumn))) missingTags.Add("AllocAccount (tag 79)");
-if (missingTrades.Any(t => IsMissing(t, qtyColumn))) missingTags.Add("AllocShares (tag 80)");
-if (missingTrades.Any(t => IsMissing(t, priceColumn))) missingTags.Add("AllocAvgPx (tag 153)");
+                        var missingTags = new List<string>();
+                        if (missingTrades.Any(t => IsMissing(t, sideColumn))) missingTags.Add("Side (tag 54)");
+                        if (missingTrades.Any(t => IsMissing(t, symbolColumn))) missingTags.Add("Symbol (tag 55)");
+                        if (missingTrades.Any(t => IsMissing(t, accountColumn))) missingTags.Add("AllocAccount (tag 79)");
+                        if (missingTrades.Any(t => IsMissing(t, qtyColumn))) missingTags.Add("AllocShares (tag 80)");
+                        if (missingTrades.Any(t => IsMissing(t, priceColumn))) missingTags.Add("AllocAvgPx (tag 153)");
 
-if (missingTrades.Any())
-{
-    Console.WriteLine($"?? {missingTrades.Count} out of {totalTrades} Allocations have failed to process because it is missing required value(s): {string.Join(", ", missingTags)}");
-}
+                        if (missingTrades.Any())
+                        {
+                            Console.WriteLine($"?? {missingTrades.Count} out of {totalTrades} Allocations have failed to process because it is missing required value(s): {string.Join(", ", missingTags)}");
+                        }
 
-var groupedBySymbolAndSide = trades
-    .Except(missingTrades)
-    .GroupBy(t => new
-    {
-        Symbol = t.Fields.TryGetValue(symbolColumn, out var symbolValue) ? symbolValue.Trim() : string.Empty,
-        Side = t.Fields.TryGetValue(sideColumn, out var sideValue) ? sideValue.Trim() : string.Empty
-    })
-    .ToList();
+                        var groupedBySymbolAndSide = trades
+                            .Except(missingTrades)
+                            .GroupBy(t => new
+                            {
+                                Symbol = t.Fields.TryGetValue(symbolColumn, out var symbolValue) ? symbolValue.Trim() : string.Empty,
+                                Side = t.Fields.TryGetValue(sideColumn, out var sideValue) ? sideValue.Trim() : string.Empty
+                            })
+                            .ToList();
 
-if (groupedBySymbolAndSide.Count == 0)
-{
-    Console.WriteLine("?? No valid allocations to process after required field validation.");
-    continue;
-}
+                        if (groupedBySymbolAndSide.Count == 0)
+                        {
+                            Console.WriteLine("?? No valid allocations to process after required field validation.");
+                            continue;
+                        }
 
-Console.WriteLine($"?? Found {groupedBySymbolAndSide.Count} trade group(s) by symbol/side.");
+                        Console.WriteLine($"?? Found {groupedBySymbolAndSide.Count} trade group(s) by symbol/side.");
 
-// -------------------------------------------------------------------
-// ? Build and send one AllocationInstruction (35=J) per symbol
-// -------------------------------------------------------------------
-foreach (var symbolGroup in groupedBySymbolAndSide)
-{
-    string symbol = symbolGroup.Key.Symbol;
-    string side = symbolGroup.Key.Side;
-    var allocId = fixBuilder.NextAllocId();
-    string senderComp = mapping.Predefined?.SenderCompID ?? mapping.ClientId ?? "TRADEALLOC";
-    string targetComp = mapping.Predefined?.TargetCompID ?? "EXECUTOR";
+                        // -------------------------------------------------------------------
+                        // ? Build and send one AllocationInstruction (35=J) per symbol
+                        // -------------------------------------------------------------------
+                        foreach (var symbolGroup in groupedBySymbolAndSide)
+                        {
+                            string symbol = symbolGroup.Key.Symbol;
+                            string side = symbolGroup.Key.Side;
+                            var allocId = fixBuilder.NextAllocId();
+                            string senderComp = mapping.Predefined?.SenderCompID ?? mapping.ClientId ?? "TRADEALLOC";
+                            string targetComp = mapping.Predefined?.TargetCompID ?? "EXECUTOR";
 
-    FixMessage mergedMsg;
-    try
-    {
-        mergedMsg = fixBuilder.BuildFromAllocGroup(allocId, senderComp, targetComp, symbolGroup, mapping);
-    }
-    catch (Exception ex)
-    {
-        Console.WriteLine($"?? Failed to build FIX allocation for symbol '{symbol}' / side '{side}': {ex.Message}");
-        report.Add(new ValidationResult(
-            DateTime.Now.ToString("o"),
-            string.Join(",", symbolGroup.Select(t => t.Id)),
-            allocId,
-            symbol,
-            string.Empty,
-            string.Empty,
-            string.Empty,
-            "Failed",
-            ex.Message,
-            string.Empty
-        ));
-        continue;
-    }
+                            FixMessage mergedMsg;
+                            try
+                            {
+                                mergedMsg = fixBuilder.BuildFromAllocGroup(allocId, senderComp, targetComp, symbolGroup, mapping);
+                            }
+                            catch (Exception ex)
+                            {
+                                Console.WriteLine($"?? Failed to build FIX allocation for symbol '{symbol}' / side '{side}': {ex.Message}");
+                                report.Add(new ValidationResult(
+                                    DateTime.Now.ToString("o"),
+                                    string.Join(",", symbolGroup.Select(t => t.Id)),
+                                    allocId,
+                                    symbol,
+                                    string.Empty,
+                                    string.Empty,
+                                    string.Empty,
+                                    "Failed",
+                                    ex.Message,
+                                    string.Empty
+                                ));
+                                continue;
+                            }
 
-    // Retrieve the correct session ID from the FIX engine
-    SessionID? sessionID = null;
-    if (fixEngine.SessionSettings != null)
-    {
-        foreach (var sid in fixEngine.SessionSettings.GetSessions())
-        {
-            if (string.Equals(sid.SenderCompID, senderComp, StringComparison.OrdinalIgnoreCase))
-            {
-                sessionID = sid;
-                break;
-            }
-        }
-    }
+                            // Retrieve the correct session ID from the FIX engine
+                            SessionID? sessionID = null;
+                            if (fixEngine.SessionSettings != null)
+                            {
+                                foreach (var sid in fixEngine.SessionSettings.GetSessions())
+                                {
+                                    if (string.Equals(sid.SenderCompID, senderComp, StringComparison.OrdinalIgnoreCase))
+                                    {
+                                        sessionID = sid;
+                                        break;
+                                    }
+                                }
+                            }
 
-    if (sessionID is null)
-    {
-        Console.WriteLine($"?? No FIX session found for SenderCompID={senderComp}. Skipping.");
-        continue;
-    }
+                            if (sessionID is null)
+                            {
+                                Console.WriteLine($"?? No FIX session found for SenderCompID={senderComp}. Skipping.");
+                                continue;
+                            }
 
-    var nonNullSession = sessionID; // local alias
-    var sendResult = dryRun ? "OK" : await fixClient.SendAsync(mergedMsg, nonNullSession);
-    string status = sendResult == "OK" ? "OK" : "FAILED";
+                            var nonNullSession = sessionID; // local alias
+                            var sendResult = dryRun ? "OK" : await fixClient.SendAsync(mergedMsg, nonNullSession);
+                            string status = sendResult == "OK" ? "OK" : "FAILED";
 
-    Console.WriteLine($"AllocID={allocId} ({symbol}/{side})  {status}");
-    fixBuilderLogger.LogInformation(
-        "? Sent merged allocation {AllocId} for {Symbol}/{Side} ({Count} trades): {Status}",
-        allocId, symbol, side, symbolGroup.Count(), status);
+                            Console.WriteLine($"AllocID={allocId} ({symbol}/{side})  {status}");
+                            fixBuilderLogger.LogInformation(
+                                "? Sent merged allocation {AllocId} for {Symbol}/{Side} ({Count} trades): {Status}",
+                                allocId, symbol, side, symbolGroup.Count(), status);
 
-    string rawFix = mergedMsg.ToString().Replace('\u0001', '|').Replace("\r", "").Replace("\n", "");
-    report.Add(new ValidationResult(
-        DateTime.Now.ToString("o"),
-        string.Join(",", symbolGroup.Select(t => t.Id)),
-        allocId,
-        $"{symbol}/{side}",
-        mergedMsg.IsSetField(80) ? mergedMsg.GetString(80) : "",
-        mergedMsg.IsSetField(153) ? mergedMsg.GetString(153) : "",
-        mergedMsg.IsSetField(79) ? mergedMsg.GetString(79) : "",
-        status,
-        status == "OK" ? "" : sendResult,
-        rawFix
-    ));
-}
+                            string rawFix = mergedMsg.ToString().Replace('\u0001', '|').Replace("\r", "").Replace("\n", "");
+                            report.Add(new ValidationResult(
+                                DateTime.Now.ToString("o"),
+                                string.Join(",", symbolGroup.Select(t => t.Id)),
+                                allocId,
+                                $"{symbol}/{side}",
+                                mergedMsg.IsSetField(80) ? mergedMsg.GetString(80) : "",
+                                mergedMsg.IsSetField(153) ? mergedMsg.GetString(153) : "",
+                                mergedMsg.IsSetField(79) ? mergedMsg.GetString(79) : "",
+                                status,
+                                status == "OK" ? "" : sendResult,
+                                rawFix
+                            ));
+                        }
 
                     }
                 }

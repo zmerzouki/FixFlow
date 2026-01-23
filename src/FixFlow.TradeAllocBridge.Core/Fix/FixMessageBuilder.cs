@@ -6,6 +6,7 @@ using FixFlow.TradeAllocBridge.Core.Config;
 using FixFlow.TradeAllocBridge.Core.Excel;
 using FixFlow.TradeAllocBridge.Core.Mapping;
 using System.Globalization;
+using System.Xml.Linq;
 
 namespace FixFlow.TradeAllocBridge.Core.Fix;
 
@@ -19,6 +20,7 @@ public class FixMessageBuilder
     private int _orderCounter = 5000;
     private readonly string _orderCounterFile = "order_counter.chk";
     private string _currentTradeDate = DateTime.UtcNow.ToString("yyyyMMdd");
+    private static readonly Lazy<HashSet<int>> NoAllocsTags = new(LoadNoAllocsTags);
 
     public FixMessageBuilder(MappingConfig mapping, FixConfig config, ILogger<FixMessageBuilder> logger)
     {
@@ -142,6 +144,8 @@ public class FixMessageBuilder
         }
 
         // 🧠 Row-aware auto-fill for dependent fields
+        ApplyCommissionRules(msg, trade.Fields, _mapping);
+
         if (!msg.IsSetField(Tags.SecurityID) || !msg.IsSetField(Tags.SecurityIDSource))
         {
             var (secId, idSrc) = FixValueNormalizer.GetSecurityIdAndSource(trade.Fields);
@@ -271,6 +275,16 @@ public class FixMessageBuilder
     string allocAcctCol = GetColumn(79) ?? "ALLOC ACCOUNT";
     string allocQtyCol  = GetColumn(80) ?? "QUANTITY";
     string allocPxCol   = GetColumn(153) ?? "PRICE";
+    string? commCol = GetColumn(12);
+    string? commTypeCol = GetColumn(13);
+    string? miscFeeAmtCol = GetColumn(137);
+    string? miscFeeCurrCol = GetColumn(138);
+    string? miscFeeTypeCol = GetColumn(139);
+
+    if (!string.IsNullOrWhiteSpace(commCol) && string.IsNullOrWhiteSpace(commTypeCol))
+    {
+        _log.LogWarning("Commission (tag 12) is mapped but CommType (tag 13) is not.");
+    }
 
     foreach (var alloc in allocList)
     {
@@ -288,6 +302,91 @@ public class FixMessageBuilder
         if (decimal.TryParse(pxVal, NumberStyles.Any, CultureInfo.InvariantCulture, out var px))
             allocGroup.SetField(new DecimalField(153, Math.Abs(px)));
 
+        if (!string.IsNullOrWhiteSpace(commCol) && !string.IsNullOrWhiteSpace(commTypeCol))
+        {
+            var commTypeRaw = alloc.Fields.TryGetValue(commTypeCol, out var commTypeValue)
+                ? commTypeValue ?? string.Empty
+                : string.Empty;
+            var commRaw = alloc.Fields.TryGetValue(commCol, out var commValueRaw)
+                ? commValueRaw ?? string.Empty
+                : string.Empty;
+
+            if (FixValueNormalizer.TryNormalizeCommission(commTypeRaw, commRaw, out var commType, out var commValue))
+            {
+                allocGroup.SetField(new StringField(13, commType));
+                allocGroup.SetField(new StringField(12, commValue));
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(miscFeeAmtCol) || !string.IsNullOrWhiteSpace(miscFeeTypeCol))
+        {
+            var miscFeeAmtRaw = !string.IsNullOrWhiteSpace(miscFeeAmtCol) &&
+                                alloc.Fields.TryGetValue(miscFeeAmtCol, out var miscFeeAmtValue)
+                ? miscFeeAmtValue ?? string.Empty
+                : string.Empty;
+            var miscFeeTypeRaw = !string.IsNullOrWhiteSpace(miscFeeTypeCol) &&
+                                 alloc.Fields.TryGetValue(miscFeeTypeCol, out var miscFeeTypeValue)
+                ? miscFeeTypeValue ?? string.Empty
+                : string.Empty;
+            var miscFeeCurrRaw = !string.IsNullOrWhiteSpace(miscFeeCurrCol) &&
+                                 alloc.Fields.TryGetValue(miscFeeCurrCol, out var miscFeeCurrValue)
+                ? miscFeeCurrValue ?? string.Empty
+                : string.Empty;
+
+            var hasMiscFee = !string.IsNullOrWhiteSpace(miscFeeAmtRaw) ||
+                             !string.IsNullOrWhiteSpace(miscFeeTypeRaw) ||
+                             !string.IsNullOrWhiteSpace(miscFeeCurrRaw);
+
+            if (hasMiscFee)
+            {
+                if (string.IsNullOrWhiteSpace(miscFeeAmtRaw))
+                {
+                    _log.LogWarning("MiscFeeAmt (137) is required for NoMiscFees; skipping group.");
+                }
+                else
+                {
+                    if (string.IsNullOrWhiteSpace(miscFeeTypeRaw))
+                    {
+                        miscFeeTypeRaw = "7"; // OTHER
+                        _log.LogWarning("MiscFeeType (139) missing; defaulting to 7 (OTHER).");
+                    }
+
+                    var miscFeeAmt = FixValueNormalizer.Normalize(137, miscFeeAmtRaw, alloc.Fields);
+                    var miscFeeGroup = new Group(136, 137);
+                    miscFeeGroup.SetField(new StringField(137, miscFeeAmt));
+                    miscFeeGroup.SetField(new StringField(139, miscFeeTypeRaw.Trim()));
+                    if (!string.IsNullOrWhiteSpace(miscFeeCurrRaw))
+                    {
+                        miscFeeGroup.SetField(new StringField(138, miscFeeCurrRaw.Trim()));
+                    }
+
+                    allocGroup.SetField(new IntField(136, 1));
+                    allocGroup.AddGroup(miscFeeGroup);
+                }
+            }
+        }
+
+        var noAllocsTags = NoAllocsTags.Value;
+        if (noAllocsTags.Count > 0)
+        {
+            foreach (var mappingEntry in mapping.TradeAllocations)
+            {
+                if (!int.TryParse(mappingEntry.Value, out var tag)) continue;
+                if (!noAllocsTags.Contains(tag)) continue;
+                if (tag == 12 || tag == 13) continue;
+                if (allocGroup.IsSetField(tag)) continue;
+
+                if (!alloc.Fields.TryGetValue(mappingEntry.Key, out var raw) ||
+                    string.IsNullOrWhiteSpace(raw))
+                {
+                    continue;
+                }
+
+                var normalized = FixValueNormalizer.Normalize(tag, raw, alloc.Fields);
+                allocGroup.SetField(new StringField(tag, normalized));
+            }
+        }
+
         msg.AddGroup(allocGroup);
     }
 
@@ -297,6 +396,97 @@ public class FixMessageBuilder
     _log.LogDebug("FIX RAW => {RawFix}", msg.ToString().Replace('\u0001', '|'));
     return msg;
 }
+
+    private static HashSet<int> LoadNoAllocsTags()
+    {
+        var tags = new HashSet<int>();
+
+        try
+        {
+            var path = Path.Combine(AppContext.BaseDirectory, "cfg", "FIX42.xml");
+            if (!File.Exists(path))
+            {
+                return new HashSet<int> { 79, 80, 153, 12, 13, 154 };
+            }
+
+            var doc = XDocument.Load(path);
+            var root = doc.Root;
+            if (root == null) return tags;
+
+            var fieldMap = root.Element("fields")?
+                .Elements("field")
+                .Select(f => new
+                {
+                    Name = (string?)f.Attribute("name"),
+                    Number = (string?)f.Attribute("number")
+                })
+                .Where(f => !string.IsNullOrWhiteSpace(f.Name) && !string.IsNullOrWhiteSpace(f.Number))
+                .ToDictionary(f => f.Name!, f => f.Number!, StringComparer.OrdinalIgnoreCase)
+                ?? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+            var allocation = root.Element("messages")?
+                .Elements("message")
+                .FirstOrDefault(m => string.Equals((string?)m.Attribute("name"), "Allocation", StringComparison.OrdinalIgnoreCase));
+
+            if (allocation == null) return tags;
+
+            var noAllocsGroup = allocation.Elements("group")
+                .FirstOrDefault(g => string.Equals((string?)g.Attribute("name"), "NoAllocs", StringComparison.OrdinalIgnoreCase));
+
+            if (noAllocsGroup == null) return tags;
+
+            foreach (var field in noAllocsGroup.Elements("field"))
+            {
+                var name = (string?)field.Attribute("name");
+                if (string.IsNullOrWhiteSpace(name)) continue;
+                if (!fieldMap.TryGetValue(name, out var number)) continue;
+                if (!int.TryParse(number, out var tag)) continue;
+                tags.Add(tag);
+            }
+        }
+        catch
+        {
+            return new HashSet<int> { 79, 80, 153, 12, 13, 154 };
+        }
+
+        return tags;
+    }
+
+    private void ApplyCommissionRules(Message msg, IDictionary<string, string> row, MappingConfig mapping)
+    {
+        var commCol = mapping.TradeAllocations.FirstOrDefault(kvp => kvp.Value == "12").Key;
+        if (string.IsNullOrWhiteSpace(commCol))
+        {
+            return;
+        }
+
+        var commTypeCol = mapping.TradeAllocations.FirstOrDefault(kvp => kvp.Value == "13").Key;
+        if (string.IsNullOrWhiteSpace(commTypeCol))
+        {
+            _log.LogWarning("Commission (tag 12) is mapped but CommType (tag 13) is not.");
+            return;
+        }
+
+        var commTypeRaw = row.TryGetValue(commTypeCol, out var commTypeValue)
+            ? commTypeValue ?? string.Empty
+            : string.Empty;
+        var commRaw = row.TryGetValue(commCol, out var commValueRaw)
+            ? commValueRaw ?? string.Empty
+            : string.Empty;
+
+        if (!FixValueNormalizer.TryNormalizeCommission(commTypeRaw, commRaw, out var commType, out var commValue))
+        {
+            if (!string.IsNullOrWhiteSpace(commRaw) && !string.IsNullOrWhiteSpace(commTypeRaw))
+            {
+                _log.LogWarning("Commission values could not be normalized. CommType='{CommType}' Comm='{Comm}'.", commTypeRaw, commRaw);
+            }
+
+            return;
+        }
+
+        msg.SetField(new StringField(13, commType));
+        msg.SetField(new StringField(12, commValue));
+    }
 
     private static void SetOptionalHeaderFields(Message msg, PredefinedFields? predefined)
     {

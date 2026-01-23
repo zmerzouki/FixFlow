@@ -82,7 +82,9 @@ namespace FixFlow.TradeAllocBridge.WPF
 
             // Add these registrations in ConfigureServices:
             services.AddSingleton<MapEditorViewModel>();
+            services.AddSingleton<SettingsViewModel>();
             services.AddTransient<MapEditorView>();
+            services.AddTransient<SettingsView>();
             services.AddTransient<DirectIngestionView>();
             services.AddTransient<MessageHistoryView>();
         }

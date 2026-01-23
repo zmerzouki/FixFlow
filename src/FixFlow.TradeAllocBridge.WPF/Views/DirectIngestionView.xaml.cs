@@ -55,6 +55,14 @@ namespace FixFlow.TradeAllocBridge.WPF.Views
             }
         }
 
+        private void CopyFixMessage_Click(object sender, RoutedEventArgs e)
+        {
+            if (sender is Button button && button.Tag is string rawFix && !string.IsNullOrWhiteSpace(rawFix))
+            {
+                Clipboard.SetText(rawFix);
+            }
+        }
+
         // Added to satisfy ListBox SelectionChanged event declared in XAML.
         // Updates the view model's SelectedClient based on the ListBox selection.
         private void ListBox_SelectionChanged(object sender, SelectionChangedEventArgs e)

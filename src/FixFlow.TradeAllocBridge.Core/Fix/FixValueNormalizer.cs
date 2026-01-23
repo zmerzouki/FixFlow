@@ -2,6 +2,7 @@
 using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
+using System.Xml.Linq;
 
 namespace FixFlow.TradeAllocBridge.Core.Fix;
 
@@ -11,6 +12,7 @@ namespace FixFlow.TradeAllocBridge.Core.Fix;
 /// </summary>
 public static class FixValueNormalizer
 {
+    private static readonly Lazy<HashSet<int>> NumericTags = new(LoadNumericTags);
     /// <summary>
     /// Backwards-compatible normalization (no row context).
     /// </summary>
@@ -54,7 +56,7 @@ public static class FixValueNormalizer
             153 => NormalizePrice(raw),
             75 => NormalizeTradeDate(raw),
             15 => raw.ToUpperInvariant(), // Currency
-            _ => raw
+            _ => NormalizeNumericIfNeeded(tag, raw)
         };
     }
 
@@ -105,14 +107,56 @@ public static class FixValueNormalizer
         return "1";
     }
 
-    private static string NormalizeCommType(string value)
+        private static string MapCommType(string value)
     {
-        value = value.ToUpperInvariant();
-        if (value.Contains("ABS") || value.StartsWith("A")) return "3";
-        if (value.Contains("PER") && value.Contains("SHARE")) return "1";
-        if (value.Contains("PCT") || value.Contains("PERCENT")) return "2";
-        if (value.Contains("BOND")) return "6";
-        return "1";
+        var upper = (value ?? string.Empty).ToUpperInvariant();
+
+        if (upper.Contains("CENT") || (upper.Contains("PER") && upper.Contains("SHARE")))
+            return "1"; // cents per share
+
+        if (upper.Contains("ABS") || upper.Contains("ABSOLUTE") || upper.StartsWith("A"))
+            return "3"; // absolute
+
+        if (upper.Contains("PCT") || upper.Contains("PERCENT"))
+            return "2"; // percent
+
+        if (upper.Contains("BOND"))
+            return "6";
+
+        return "1"; // default
+    }
+
+    private static string NormalizeCommType(string value) => MapCommType(value);
+
+    public static bool TryNormalizeCommission(string commTypeRaw, string commissionRaw, out string commType, out string commValue)
+    {
+        commType = string.Empty;
+        commValue = string.Empty;
+
+        if (string.IsNullOrWhiteSpace(commTypeRaw) || string.IsNullOrWhiteSpace(commissionRaw))
+        {
+            return false;
+        }
+
+        commType = MapCommType(commTypeRaw);
+
+        if (!decimal.TryParse(commissionRaw, NumberStyles.Any, CultureInfo.InvariantCulture, out var commission))
+        {
+            return false;
+        }
+
+        var normalized = commType switch
+        {
+            // For commType "1" (cents per share) if the provided value is >= 1 treat it as cents and divide by 100,
+            // otherwise assume it's already a decimal representation and leave it unchanged.
+            "1" => commission >= 1m ? commission / 100m : commission,
+            "2" => commission,
+            "3" => Math.Abs(commission),
+            _ => commission
+        };
+
+        commValue = normalized.ToString("0.######", CultureInfo.InvariantCulture);
+        return true;
     }
 
     private static string NormalizeQuantity(string value) =>
@@ -124,6 +168,25 @@ public static class FixValueNormalizer
         decimal.TryParse(value, NumberStyles.Number, CultureInfo.InvariantCulture, out var price)
             ? Math.Abs(price).ToString("0.#####", CultureInfo.InvariantCulture)
             : "0";
+
+    private static string NormalizeNumericIfNeeded(int tag, string value)
+    {
+        var raw = value?.Trim() ?? string.Empty;
+        if (raw.Length == 0) return raw;
+
+        if (!NumericTags.Value.Contains(tag))
+        {
+            return raw;
+        }
+
+        if (!decimal.TryParse(raw, NumberStyles.Number, CultureInfo.InvariantCulture, out var number))
+        {
+            return raw;
+        }
+
+        var normalized = Math.Abs(number);
+        return normalized.ToString(CultureInfo.InvariantCulture);
+    }
 
     private static string NormalizeTradeDate(string value)
     {
@@ -137,5 +200,56 @@ public static class FixValueNormalizer
 
         // fallback to today's date
         return DateTime.UtcNow.ToString("yyyyMMdd");
+    }
+
+    private static HashSet<int> LoadNumericTags()
+    {
+        var tags = new HashSet<int>();
+
+        try
+        {
+            var path = Path.Combine(AppContext.BaseDirectory, "cfg", "FIX42.xml");
+            if (!File.Exists(path))
+            {
+                return tags;
+            }
+
+            var numericTypes = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            {
+                "AMT",
+                "PRICE",
+                "QTY",
+                "FLOAT",
+                "INT",
+                "NUMINGROUP",
+                "LENGTH",
+                "SEQNUM",
+                "PRICEOFFSET",
+                "PERCENTAGE",
+                "DAYOFMONTH"
+            };
+
+            var doc = XDocument.Load(path);
+            var fields = doc.Root?.Element("fields")?.Elements("field");
+            if (fields == null) return tags;
+
+            foreach (var field in fields)
+            {
+                var type = (string?)field.Attribute("type");
+                var number = (string?)field.Attribute("number");
+
+                if (string.IsNullOrWhiteSpace(type) || string.IsNullOrWhiteSpace(number)) continue;
+                if (!numericTypes.Contains(type)) continue;
+                if (!int.TryParse(number, out var tag)) continue;
+
+                tags.Add(tag);
+            }
+        }
+        catch
+        {
+            return tags;
+        }
+
+        return tags;
     }
 }
