@@ -54,25 +54,46 @@ public class ExcelParser
             return trades;
         }
 
-        // Parse headers (first line)
-        var headers = lines[0]
-            .Split(',')
-            .Select(h => h.Trim().Trim('"'))
-            .Where(h => !string.IsNullOrWhiteSpace(h))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToList();
+        // Parse headers (detect header row)
+        int headerRowIndex = -1;
+        var headerColumns = new List<(int ColumnIndex, string Header)>();
+        int maxScan = Math.Min(lines.Length - 1, 50);
 
-        if (headers.Count == 0)
+        for (int rowIndex = 0; rowIndex <= maxScan; rowIndex++)
+        {
+            var values = ParseCsvLine(lines[rowIndex]);
+            var headers = new List<(int ColumnIndex, string Header)>();
+            for (int i = 0; i < values.Count; i++)
+            {
+                var header = values[i].Trim().Trim('"');
+                if (string.IsNullOrWhiteSpace(header)) continue;
+                if (!headers.Any(h => string.Equals(h.Header, header, StringComparison.OrdinalIgnoreCase)))
+                {
+                    headers.Add((i, header));
+                }
+            }
+
+            if (headers.Count < 2) continue;
+
+            if (headers.Count > headerColumns.Count)
+            {
+                headerColumns = headers;
+                headerRowIndex = rowIndex;
+            }
+        }
+
+        if (headerRowIndex < 0 || headerColumns.Count == 0)
         {
             _logger?.LogWarning("No headers found in CSV file {File}", filePath);
             return trades;
         }
 
+        var headerNames = headerColumns.Select(h => h.Header).ToList();
         _logger?.LogInformation("Parsing CSV file {File} with {Count} headers: {Headers}",
-            Path.GetFileName(filePath), headers.Count, string.Join(", ", headers));
+            Path.GetFileName(filePath), headerNames.Count, string.Join(", ", headerNames));
 
         // Parse data rows
-        for (int rowIndex = 1; rowIndex < lines.Length; rowIndex++)
+        for (int rowIndex = headerRowIndex + 1; rowIndex < lines.Length; rowIndex++)
         {
             var line = lines[rowIndex];
             if (string.IsNullOrWhiteSpace(line))
@@ -80,11 +101,14 @@ public class ExcelParser
 
             var values = ParseCsvLine(line);
             var record = new TradeRecord();
+            bool anyValue = false;
 
-            for (int i = 0; i < headers.Count && i < values.Count; i++)
+            foreach (var headerInfo in headerColumns)
             {
-                string header = headers[i];
-                string cellValue = values[i].Trim().Trim('"');
+                string header = headerInfo.Header;
+                string cellValue = headerInfo.ColumnIndex < values.Count
+                    ? values[headerInfo.ColumnIndex].Trim().Trim('"')
+                    : string.Empty;
 
                 if (!string.IsNullOrWhiteSpace(header))
                 {
@@ -93,9 +117,12 @@ public class ExcelParser
                     else
                         _logger?.LogDebug("Duplicate header '{Header}' ignored in {File}", header, filePath);
                 }
+
+                if (!string.IsNullOrWhiteSpace(cellValue))
+                    anyValue = true;
             }
 
-            if (record.Fields.Count > 0)
+            if (record.Fields.Count > 0 && anyValue)
                 trades.Add(record);
         }
 
@@ -167,48 +194,32 @@ public class ExcelParser
             return trades;
         }
 
-        // Parse headers (first row)
-        var headerRow = sheet.GetRow(0);
-        if (headerRow == null)
+        // Parse headers (detect header row)
+        var (headerRowIndex, headerColumns) = FindHeaderRow(sheet);
+        if (headerRowIndex < 0 || headerColumns.Count == 0)
         {
             _logger?.LogWarning("No header row found in Excel file {File}", filePath);
             return trades;
         }
 
-        var headers = new List<string>();
-        for (int i = 0; i < headerRow.LastCellNum; i++)
-        {
-            var cell = headerRow.GetCell(i);
-            if (cell != null)
-            {
-                string header = GetCellValue(cell).Trim();
-                if (!string.IsNullOrWhiteSpace(header) && !headers.Contains(header, StringComparer.OrdinalIgnoreCase))
-                    headers.Add(header);
-            }
-        }
-
-        if (headers.Count == 0)
-        {
-            _logger?.LogWarning("No valid headers found in Excel file {File}", filePath);
-            return trades;
-        }
-
+        var headers = headerColumns.Select(h => h.Header).ToList();
         _logger?.LogInformation("Parsing Excel file {File} with {Count} headers: {Headers}",
             Path.GetFileName(filePath), headers.Count, string.Join(", ", headers));
 
         // Parse data rows
-        for (int rowIndex = 1; rowIndex <= sheet.LastRowNum; rowIndex++)
+        for (int rowIndex = headerRowIndex + 1; rowIndex <= sheet.LastRowNum; rowIndex++)
         {
             var row = sheet.GetRow(rowIndex);
             if (row == null)
                 continue;
 
             var record = new TradeRecord();
+            bool anyValue = false;
 
-            for (int i = 0; i < headers.Count; i++)
+            foreach (var headerInfo in headerColumns)
             {
-                string header = headers[i];
-                var cell = row.GetCell(i);
+                string header = headerInfo.Header;
+                var cell = row.GetCell(headerInfo.ColumnIndex);
                 string cellValue = cell != null ? GetCellValue(cell).Trim() : string.Empty;
 
                 if (!string.IsNullOrWhiteSpace(header))
@@ -218,9 +229,12 @@ public class ExcelParser
                     else
                         _logger?.LogDebug("Duplicate header '{Header}' ignored in {File}", header, filePath);
                 }
+
+                if (!string.IsNullOrWhiteSpace(cellValue))
+                    anyValue = true;
             }
 
-            if (record.Fields.Count > 0)
+            if (record.Fields.Count > 0 && anyValue)
                 trades.Add(record);
         }
 
@@ -264,6 +278,60 @@ public class ExcelParser
             CellType.Boolean => cell.BooleanCellValue.ToString(),
             _ => string.Empty
         };
+    }
+
+    private (int RowIndex, List<(int ColumnIndex, string Header)> Headers) FindHeaderRow(ISheet sheet)
+    {
+        int bestRow = -1;
+        List<(int ColumnIndex, string Header)> bestHeaders = new();
+        int maxScan = Math.Min(sheet.LastRowNum, 50);
+
+        for (int rowIndex = 0; rowIndex <= maxScan; rowIndex++)
+        {
+            var row = sheet.GetRow(rowIndex);
+            if (row == null) continue;
+
+            var headers = new List<(int ColumnIndex, string Header)>();
+            for (int i = 0; i < row.LastCellNum; i++)
+            {
+                var cell = row.GetCell(i);
+                if (cell == null) continue;
+                string header = GetCellValue(cell).Trim();
+                if (string.IsNullOrWhiteSpace(header)) continue;
+
+                if (!headers.Any(h => string.Equals(h.Header, header, StringComparison.OrdinalIgnoreCase)))
+                    headers.Add((i, header));
+            }
+
+            if (headers.Count < 2) continue;
+
+            if (headers.Count > bestHeaders.Count)
+            {
+                bestRow = rowIndex;
+                bestHeaders = headers;
+            }
+        }
+
+        if (bestRow < 0)
+        {
+            var fallback = sheet.GetRow(0);
+            if (fallback == null) return (-1, new List<(int, string)>());
+
+            var headers = new List<(int ColumnIndex, string Header)>();
+            for (int i = 0; i < fallback.LastCellNum; i++)
+            {
+                var cell = fallback.GetCell(i);
+                if (cell == null) continue;
+                string header = GetCellValue(cell).Trim();
+                if (string.IsNullOrWhiteSpace(header)) continue;
+                if (!headers.Any(h => string.Equals(h.Header, header, StringComparison.OrdinalIgnoreCase)))
+                    headers.Add((i, header));
+            }
+
+            return (headers.Count > 0 ? 0 : -1, headers);
+        }
+
+        return (bestRow, bestHeaders);
     }
 
     // ClosedXML parser removed in favor of NPOI-based path to avoid font-related dependency issues.

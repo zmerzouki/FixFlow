@@ -1,4 +1,6 @@
+using System.Collections.Generic;
 using System.ComponentModel;
+using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
 using FixFlow.TradeAllocBridge.WPF.ViewModels;
@@ -14,6 +16,24 @@ namespace FixFlow.TradeAllocBridge.WPF.Views
             InitializeComponent();
             DataContext = viewModel;
             _mapEditorViewModel = mapEditorViewModel;
+        }
+
+        public void NavigateToDirectIngestion(string clientId)
+        {
+            if (DataContext is AllocationProcessorViewModel vm)
+            {
+                var match = vm.AvailableClients.FirstOrDefault(c => c.Key == clientId);
+                if (!string.IsNullOrWhiteSpace(match.Key))
+                {
+                    vm.SelectedClient = match;
+                }
+                else
+                {
+                    vm.SelectedClient = new KeyValuePair<string, string>(clientId, clientId);
+                }
+            }
+
+            MainTabs.SelectedIndex = 0;
         }
 
         protected override void OnClosing(CancelEventArgs e)

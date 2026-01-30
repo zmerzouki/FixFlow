@@ -8,6 +8,8 @@ namespace FixFlow.TradeAllocBridge.WPF.Views
 {
     public partial class MapEditorView : UserControl
     {
+        private bool _hasShownOnce;
+
         public MapEditorView() : this(((App)Application.Current).Services.GetRequiredService<MapEditorViewModel>())
         {
         }
@@ -16,6 +18,7 @@ namespace FixFlow.TradeAllocBridge.WPF.Views
         {
             InitializeComponent();
             DataContext = viewModel;
+            viewModel.ValidateRequested += OnValidateRequested;
 
             // Refresh mappings when tab becomes visible to recover from state after Direct Ingestion
             IsVisibleChanged += (s, e) =>
@@ -24,8 +27,25 @@ namespace FixFlow.TradeAllocBridge.WPF.Views
                 {
                     vm.LoadAvailableMappings();
                     vm.RefreshSelectedMapping();
+                    if (!_hasShownOnce)
+                    {
+                        vm.IsFirstVisit = true;
+                        _hasShownOnce = true;
+                    }
+                }
+                else if (!IsVisible && DataContext is MapEditorViewModel hiddenVm && _hasShownOnce)
+                {
+                    hiddenVm.IsFirstVisit = false;
                 }
             };
+        }
+
+        private void OnValidateRequested(string clientId)
+        {
+            if (Application.Current?.MainWindow is MainWindow window)
+            {
+                window.NavigateToDirectIngestion(clientId);
+            }
         }
     }
 }

@@ -1,0 +1,80 @@
+<UserControl x:Class="FixFlow.TradeAllocBridge.WPF.Views.MessageLogView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             Background="#ffffff">
+    <Grid Margin="20">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+
+        <!-- Header -->
+        <StackPanel Grid.Row="0" Orientation="Vertical" Margin="0,0,0,15">
+            <TextBlock FontSize="14" FontWeight="SemiBold" Foreground="#333" Margin="0,0,0,10">FIX Message Log</TextBlock>
+            <StackPanel Orientation="Horizontal">
+                <Button Content="&#x1F504; Refresh" Command="{Binding RefreshCommand}" Style="{StaticResource PrimaryButton}" Background="#0078d4" Padding="10,6" FontSize="11" Margin="0,0,10,0"/>
+                <Button Content="&#x1F4CB; Copy Selected" Style="{StaticResource PrimaryButton}" Background="#107c10" Padding="10,6" FontSize="11" Margin="0,0,10,0" Click="CopySelected_Click"/>
+                <Button Content="&#x1F4BE; Export to CSV" Command="{Binding ExportCommand}" Style="{StaticResource PrimaryButton}" Background="#7fba00" Padding="10,6" FontSize="11"/>
+            </StackPanel>
+        </StackPanel>
+
+        <!-- Filter Section -->
+        <Border Grid.Row="1" BorderBrush="#d0d0d0" BorderThickness="1" Padding="12" Background="#f9f9f9" Margin="0,0,0,15">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="220"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+
+                <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
+                    <TextBlock Text="Source:" VerticalAlignment="Center" FontSize="11" FontWeight="SemiBold"/>
+                    <ComboBox ItemsSource="{Binding Sources}"
+                              SelectedItem="{Binding SelectedSource}"
+                              DisplayMemberPath="Name"
+                              Padding="8"
+                              FontSize="11"
+                              Margin="10,0,0,0"
+                              Width="200"
+                              Height="28"/>
+                </StackPanel>
+                <TextBlock Grid.Column="2"
+                           Text="{Binding StatusMessage}"
+                           VerticalAlignment="Center"
+                           FontSize="11"
+                           Foreground="#666"
+                           TextWrapping="Wrap"/>
+            </Grid>
+        </Border>
+
+        <!-- Message List -->
+        <DataGrid x:Name="MessageLogGrid"
+                  Grid.Row="2"
+                  AutoGenerateColumns="False"
+                  CanUserAddRows="False"
+                  FontSize="10"
+                  BorderBrush="#d0d0d0"
+                  BorderThickness="1"
+                  SelectionMode="Extended"
+                  SelectionUnit="FullRow"
+                  ItemsSource="{Binding Entries}">
+            <DataGrid.ContextMenu>
+                <ContextMenu>
+                    <MenuItem Header="Copy Raw FIX" Click="CopyRawFix_Click"/>
+                </ContextMenu>
+            </DataGrid.ContextMenu>
+            <DataGrid.Columns>
+                <DataGridTextColumn Header="Timestamp" Width="150" Binding="{Binding Timestamp, StringFormat='yyyy-MM-dd HH:mm:ss'}"/>
+                <DataGridTextColumn Header="Client" Width="90" Binding="{Binding ClientId}"/>
+                <DataGridTextColumn Header="AllocID" Width="140" Binding="{Binding AllocId}"/>
+                <DataGridTextColumn Header="Side" Width="70" Binding="{Binding Side}"/>
+                <DataGridTextColumn Header="Symbol" Width="80" Binding="{Binding Symbol}"/>
+                <DataGridTextColumn Header="Status" Width="90" Binding="{Binding ProcessingStatus}"/>
+                <DataGridTextColumn Header="Error Details" Width="240" Binding="{Binding ErrorDetails}"/>
+                <DataGridTextColumn Header="Raw FIX" Width="*" Binding="{Binding RawFixMessage}"/>
+            </DataGrid.Columns>
+        </DataGrid>
+    </Grid>
+</UserControl>
+

@@ -106,6 +106,11 @@ namespace FixFlow.TradeAllocBridge.WPF.ViewModels
                 var errors = new List<string>();
                 foreach (var setting in Settings)
                 {
+                    if (setting.IsSecret && !setting.HasNewSecret)
+                    {
+                        continue;
+                    }
+
                     var updated = SetJsonValue(root, setting.Path, setting.Value, errors);
                     if (!updated)
                     {
@@ -121,6 +126,10 @@ namespace FixFlow.TradeAllocBridge.WPF.ViewModels
 
                 var options = new JsonSerializerOptions { WriteIndented = true };
                 File.WriteAllText(_settingsFilePath, root.ToJsonString(options));
+                foreach (var setting in Settings)
+                {
+                    setting.MarkSaved();
+                }
                 StatusMessage = "Settings saved.";
             }
             catch (Exception ex)
@@ -155,7 +164,10 @@ namespace FixFlow.TradeAllocBridge.WPF.ViewModels
                     var key = string.IsNullOrEmpty(prefix) ? section : prefix;
                     var path = string.IsNullOrEmpty(prefix) ? section : $"{section}:{prefix}";
                     var displayKey = GetDisplayKey(section, key);
-                    var item = new SettingItem(section, key, displayKey, GetValueString(value), path);
+                    var rawValue = GetValueString(value);
+                    var isSecret = key.IndexOf("ClientSecret", StringComparison.OrdinalIgnoreCase) >= 0
+                        || path.IndexOf("ClientSecret", StringComparison.OrdinalIgnoreCase) >= 0;
+                    var item = new SettingItem(section, key, displayKey, rawValue, path, isSecret);
                     Settings.Add(item);
                     break;
             }
@@ -383,13 +395,14 @@ namespace FixFlow.TradeAllocBridge.WPF.ViewModels
     {
         private string _value;
 
-        public SettingItem(string section, string key, string displayKey, string value, string path)
+        public SettingItem(string section, string key, string displayKey, string value, string path, bool isSecret)
         {
             Section = section;
             Key = key;
             DisplayKey = displayKey;
             _value = value;
             Path = path;
+            IsSecret = isSecret;
         }
 
         public string Section { get; }
@@ -406,8 +419,45 @@ namespace FixFlow.TradeAllocBridge.WPF.ViewModels
                 {
                     _value = value;
                     PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Value)));
+                    PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(DisplayValue)));
                 }
             }
+        }
+
+        public bool IsSecret { get; }
+
+        public bool HasNewSecret { get; private set; }
+
+        public string DisplayValue => IsSecret
+            ? (string.IsNullOrWhiteSpace(_value) ? string.Empty : "********")
+            : _value;
+
+        public string EditValue
+        {
+            get => IsSecret ? string.Empty : _value;
+            set
+            {
+                if (IsSecret)
+                {
+                    if (!string.IsNullOrWhiteSpace(value))
+                    {
+                        _value = value;
+                        HasNewSecret = true;
+                        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Value)));
+                        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(DisplayValue)));
+                    }
+                }
+                else
+                {
+                    Value = value;
+                }
+            }
+        }
+
+        public void MarkSaved()
+        {
+            HasNewSecret = false;
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(DisplayValue)));
         }
 
         public event PropertyChangedEventHandler? PropertyChanged;

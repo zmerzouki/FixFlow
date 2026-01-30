@@ -77,16 +77,17 @@ namespace FixFlow.TradeAllocBridge.WPF
                 builder.AddSerilog());
 
             // Register ViewModels and Views
-            services.AddTransient<AllocationProcessorViewModel>();
+            services.AddSingleton<AllocationProcessorViewModel>();
             services.AddSingleton<MainWindow>();
 
             // Add these registrations in ConfigureServices:
             services.AddSingleton<MapEditorViewModel>();
             services.AddSingleton<SettingsViewModel>();
+            services.AddSingleton<MessageLogViewModel>();
             services.AddTransient<MapEditorView>();
             services.AddTransient<SettingsView>();
             services.AddTransient<DirectIngestionView>();
-            services.AddTransient<MessageHistoryView>();
+            services.AddTransient<MessageLogView>();
         }
 
         protected override void OnExit(ExitEventArgs e)
@@ -96,3 +97,4 @@ namespace FixFlow.TradeAllocBridge.WPF
         }
     }
 }
+
