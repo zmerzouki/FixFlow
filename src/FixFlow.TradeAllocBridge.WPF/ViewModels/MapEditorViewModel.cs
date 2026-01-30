@@ -31,6 +31,7 @@ namespace FixFlow.TradeAllocBridge.WPF.ViewModels
         private string _newFieldTag = string.Empty;
         private bool _isProgrammaticSenderCompSet;
         private bool _isEditing;
+        private bool _isFirstVisit = true;
         private string _statusMessage = "Ready";
         private int _testTradesCount;
         private ObservableCollection<FixMessageResult> _testResults;
@@ -46,14 +47,12 @@ namespace FixFlow.TradeAllocBridge.WPF.ViewModels
         // Available FIX tags for dropdowns
         public readonly Dictionary<int, string> CommonFixTags = new()
         {
-            { 1, "Account" },
             { 6, "AvgPx" },
             { 11, "ClOrdID" },
             { 14, "CumQty" },
             { 38, "OrderQty" },
             { 40, "OrdType" },
             { 44, "Price" },
-            { 49, "SenderCompID" },
             { 54, "Side (Buy=1, Sell=2)" },
             { 55, "Symbol" },
             { 56, "TargetCompID" },
@@ -80,6 +79,7 @@ namespace FixFlow.TradeAllocBridge.WPF.ViewModels
         public ObservableCollection<KeyValuePair<string, string>> FieldMappings { get; }
         public ICommand NewMappingCommand { get; }
         public ICommand EditMappingCommand { get; }
+        public ICommand ValidateMappingCommand { get; }
         public ICommand SaveMappingCommand { get; }
         public ICommand DeleteMappingCommand { get; }
         public ICommand CancelCommand { get; }
@@ -107,6 +107,7 @@ namespace FixFlow.TradeAllocBridge.WPF.ViewModels
 
             NewMappingCommand = new RelayCommand(NewMapping);
             EditMappingCommand = new RelayCommand(EditMapping, () => SelectedMapping != null);
+            ValidateMappingCommand = new RelayCommand(ValidateMapping, () => CanValidateMapping);
             SaveMappingCommand = new RelayCommand(SaveMapping, () => CanSave);
             DeleteMappingCommand = new RelayCommand(DeleteMapping, () => SelectedMapping != null && !IsEditing);
             CancelCommand = new RelayCommand(Cancel, () => IsEditing);
@@ -131,7 +132,10 @@ namespace FixFlow.TradeAllocBridge.WPF.ViewModels
                 {
                     AvailableMappings.Add(mapping.ClientId);
                 }
-                StatusMessage = $"Loaded {AvailableMappings.Count} mapping(s)";
+                if (!IsEditing)
+                {
+                    StatusMessage = $"Loaded {AvailableMappings.Count} mapping(s)";
+                }
             }
             catch (Exception ex)
             {
@@ -150,6 +154,9 @@ namespace FixFlow.TradeAllocBridge.WPF.ViewModels
                 {
                     _selectedMapping = value;
                     OnPropertyChanged(nameof(SelectedMapping));
+                    OnPropertyChanged(nameof(ShowMappingDetails));
+                    OnPropertyChanged(nameof(CanValidateMapping));
+                    CommandManager.InvalidateRequerySuggested();
                     if (!IsEditing && value != null)
                     {
                         LoadMappingDetails(value);
@@ -408,11 +415,33 @@ namespace FixFlow.TradeAllocBridge.WPF.ViewModels
                 {
                     _isEditing = value;
                     OnPropertyChanged(nameof(IsEditing));
+                    OnPropertyChanged(nameof(ShowMappingDetails));
+                    OnPropertyChanged(nameof(CanValidateMapping));
                     OnPropertyChanged(nameof(CanSave));
                     RefreshFieldCommands();
                 }
             }
         }
+
+        public bool CanValidateMapping => !IsEditing && SelectedMapping != null;
+
+        public event Action<string>? ValidateRequested;
+
+        public bool IsFirstVisit
+        {
+            get => _isFirstVisit;
+            set
+            {
+                if (_isFirstVisit != value)
+                {
+                    _isFirstVisit = value;
+                    OnPropertyChanged(nameof(IsFirstVisit));
+                    OnPropertyChanged(nameof(ShowMappingDetails));
+                }
+            }
+        }
+
+        public bool ShowMappingDetails => !IsFirstVisit || SelectedMapping != null || IsEditing;
 
         public string StatusMessage
         {
@@ -761,6 +790,15 @@ namespace FixFlow.TradeAllocBridge.WPF.ViewModels
                     return;
                 }
 
+                var duplicateClient = AvailableMappings
+                    .Any(m => string.Equals(m, ClientId, StringComparison.OrdinalIgnoreCase));
+                if (duplicateClient &&
+                    !string.Equals(SelectedMapping, ClientId, StringComparison.OrdinalIgnoreCase))
+                {
+                    StatusMessage = $"The map for {ClientId} already exists. {ClientId} map must first be deleted before creating a new one with the same name.";
+                    return;
+                }
+
                 if (!HasRequiredTags)
                 {
                     StatusMessage = "Missing required FIX fields. Please map tags 54, 55, 79, 80, and 153 before saving.";
@@ -827,7 +865,7 @@ namespace FixFlow.TradeAllocBridge.WPF.ViewModels
             }
 
             var clientId = SelectedMapping;
-            var confirmDelete = ShowConfirmationDialog("Confirm Delete", $"Are you sure you want to delete the \"{clientId}\" map?");
+            var confirmDelete = ShowDeleteConfirmation(clientId);
             if (!confirmDelete)
             {
                 StatusMessage = "Delete cancelled";
@@ -842,7 +880,7 @@ namespace FixFlow.TradeAllocBridge.WPF.ViewModels
                 var deployedExists = File.Exists(cliPath);
 
                 var deleteDeployed = deployedExists
-                    ? ShowConfirmationDialog("Delete Deployed Copy", $"A copy of the \"{clientId}\" map is deployed to a background processing service. Selecting Yes will delete all copies (master and deployed).")
+                    ? ShowConfirmationDialog("Delete Deployed Copy", $"A copy of the \"{clientId}\" map is deployed to the email automation service. Selecting Yes will delete all copies (master and deployed).")
                     : false;
 
                 if (deployedExists && !deleteDeployed)
@@ -1016,6 +1054,67 @@ namespace FixFlow.TradeAllocBridge.WPF.ViewModels
             return result;
         }
 
+        private bool ShowDeleteConfirmation(string clientId)
+        {
+            var result = false;
+
+            var grid = new Grid
+            {
+                Margin = new Thickness(16)
+            };
+            grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+
+            var text = new TextBlock
+            {
+                Text = $"Are you sure you want to delete {clientId} map? Deleting a map record cannot be undone. Are you sure you wish to proceed?",
+                Margin = new Thickness(0, 0, 0, 12),
+                TextWrapping = TextWrapping.Wrap,
+                Width = 380
+            };
+            Grid.SetRow(text, 0);
+            grid.Children.Add(text);
+
+            var buttonPanel = new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                HorizontalAlignment = HorizontalAlignment.Right
+            };
+
+            var confirmButton = new Button { Content = "Confirm", MinWidth = 90, IsDefault = true, Margin = new Thickness(0, 0, 8, 0) };
+            var cancelButton = new Button { Content = "Cancel", MinWidth = 90, IsCancel = true };
+
+            buttonPanel.Children.Add(confirmButton);
+            buttonPanel.Children.Add(cancelButton);
+
+            Grid.SetRow(buttonPanel, 1);
+            grid.Children.Add(buttonPanel);
+
+            var dialog = new Window
+            {
+                Title = "Confirm Delete",
+                Owner = Application.Current?.MainWindow,
+                WindowStartupLocation = WindowStartupLocation.CenterScreen,
+                ResizeMode = ResizeMode.NoResize,
+                WindowStyle = WindowStyle.ToolWindow,
+                ShowInTaskbar = false,
+                SizeToContent = SizeToContent.WidthAndHeight,
+                Content = grid
+            };
+
+            void CloseWith(bool value)
+            {
+                result = value;
+                dialog.DialogResult = true;
+            }
+
+            confirmButton.Click += (_, __) => CloseWith(true);
+            cancelButton.Click += (_, __) => CloseWith(false);
+
+            dialog.ShowDialog();
+            return result;
+        }
+
         private void MarkDirty()
         {
             if (_suppressChangeTracking)
@@ -1100,6 +1199,16 @@ namespace FixFlow.TradeAllocBridge.WPF.ViewModels
         {
             StatusMessage = "Testing mapping... (Create a sample spreadsheet and try direct ingestion)";
             _logger.LogInformation("To test this mapping, use the Direct Ingestion tab with a sample spreadsheet");
+        }
+
+        private void ValidateMapping()
+        {
+            if (!CanValidateMapping || SelectedMapping == null)
+            {
+                return;
+            }
+
+            ValidateRequested?.Invoke(SelectedMapping);
         }
 
         private void DeployMapping()
@@ -1188,7 +1297,7 @@ namespace FixFlow.TradeAllocBridge.WPF.ViewModels
 
                 // Expose incoming path to UI for user verification
                 IncomingFolderPath = incomingPath;
-                StatusMessage = $"Mapping '{SelectedMapping}' staged to incoming folder: {incomingPath}";
+                StatusMessage = $"Mapping '{SelectedMapping}' deployed to Email Automation Service";
                 _logger.LogInformation("Staged mapping: {ClientId} to {Path}", SelectedMapping, incomingPath);
             }
             catch (Exception ex)

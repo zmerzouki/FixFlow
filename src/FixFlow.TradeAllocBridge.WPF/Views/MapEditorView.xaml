@@ -72,10 +72,11 @@
                      Margin="0,0,0,10"/>
 
                 <StackPanel>
-                    <Button Content="New" Command="{Binding NewMappingCommand}" Style="{StaticResource PrimaryButton}" Height="32" FontSize="11" Margin="0,0,0,8"/>
-                    <Button Content="Edit" Command="{Binding EditMappingCommand}" Style="{StaticResource PrimaryButton}" Background="#107c10" Height="32" FontSize="11" Margin="0,0,0,8"/>
-                    <Button Content="Deploy" Command="{Binding DeployMappingCommand}" Style="{StaticResource PrimaryButton}" Background="#7fba00" Height="32" FontSize="11" Margin="0,0,0,8"/>
-                    <Button Content="Delete" Command="{Binding DeleteMappingCommand}" Style="{StaticResource PrimaryButton}" Background="#d13438" Height="32" FontSize="11"/>
+                    <Button Content="&#x2795; New" Command="{Binding NewMappingCommand}" Style="{StaticResource PrimaryButton}" Background="#005a9e" Height="32" FontSize="12" FontWeight="SemiBold" Margin="0,0,0,8"/>
+                    <Button Content="&#x270F;&#xFE0F; Edit" Command="{Binding EditMappingCommand}" Style="{StaticResource PrimaryButton}" Background="#FF21B1C9" Height="32" FontSize="12" FontWeight="SemiBold" Margin="0,0,0,8"/>
+                    <Button Content="&#x2705; Validate" Command="{Binding ValidateMappingCommand}" Style="{StaticResource PrimaryButton}" Background="#FF2BB61B" Height="32" FontSize="12" FontWeight="SemiBold" Margin="0,0,0,8"/>
+                    <Button Content="&#x1F4E8; Automate" Command="{Binding DeployMappingCommand}" Style="{StaticResource PrimaryButton}" Background="#FF699170" Height="32" FontSize="12" FontWeight="SemiBold" Margin="0,0,0,8"/>
+                    <Button Content="&#x1F5D1;&#xFE0F; Delete" Command="{Binding DeleteMappingCommand}" Style="{StaticResource PrimaryButton}" Background="#FFEB4634" Height="32" FontSize="12" FontWeight="SemiBold" Margin="0,0,0,8"/>
                 </StackPanel>
             </StackPanel>
         </Border>
@@ -92,7 +93,8 @@
                                Visibility="{Binding IncomingFolderPath, Converter={StaticResource StringToVisibilityConverter}}"/>-->
 
                     <!-- Client Identity Section -->
-                    <StackPanel Orientation="Vertical" Margin="0,0,0,5" IsEnabled="{Binding IsEditing}">
+                    <StackPanel Orientation="Vertical" Margin="0,0,0,5" IsEnabled="{Binding IsEditing}"
+                                Visibility="{Binding ShowMappingDetails, Converter={StaticResource BoolToVisibilityConverter}}">
                         <TextBlock FontSize="12" FontWeight="SemiBold" Foreground="#333"><Run Text="Client Identity"/></TextBlock>
                         <Grid>
                             <Grid.ColumnDefinitions>
@@ -121,7 +123,8 @@
                     <StackPanel Orientation="Vertical" Margin="0,0,0,8" IsEnabled="{Binding IsEditing}"/>
 
                     <!-- Field Mappings Section -->
-                    <StackPanel Orientation="Vertical" Margin="0,5,0,1">
+                    <StackPanel Orientation="Vertical" Margin="0,5,0,1"
+                                Visibility="{Binding ShowMappingDetails, Converter={StaticResource BoolToVisibilityConverter}}">
                         <Grid Margin="0,0,0,6">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="*"/>
@@ -304,13 +307,13 @@
                             Background="#107c10"
                             Height="36"
                             Margin="2,0,10,0"
-                            Visibility="{Binding IsEditing, Converter={StaticResource BoolToVisibilityConverter}}"/>
+                            Visibility="{Binding IsEditing, Converter={StaticResource BoolToVisibilityConverter}}" FontWeight="Bold"/>
                         <Button Content="Cancel" 
                             Command="{Binding CancelCommand}"
                             Style="{StaticResource PrimaryButton}"
-                            Background="#d13438"
+                            Background="#FFE83C41"
                             Height="36"
-                            Visibility="{Binding IsEditing, Converter={StaticResource BoolToVisibilityConverter}}"/>
+                            Visibility="{Binding IsEditing, Converter={StaticResource BoolToVisibilityConverter}}" FontWeight="Bold"/>
                     </StackPanel>
                 </StackPanel>
             </Border>

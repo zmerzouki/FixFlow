@@ -1,11 +1,11 @@
-﻿<Window x:Class="FixFlow.TradeAllocBridge.WPF.Views.MainWindow"
+<Window x:Class="FixFlow.TradeAllocBridge.WPF.Views.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:local="clr-namespace:FixFlow.TradeAllocBridge.WPF.Views"
-        Title="Trade Allocation Bridge"
+        Title="FixFlow"
         Width="1000"
-        Height="750"
-        WindowStartupLocation="CenterScreen"
+        Height="850"
+        WindowStartupLocation="CenterOwner"
         Icon="pack://application:,,,/Resources/FxF.ico"
         Background="#ffffff">
     <Grid>
@@ -18,29 +18,29 @@
         <!-- Header -->
         <Border Grid.Row="0" Padding="20" Background="#f0f0f0" BorderBrush="#d0d0d0" BorderThickness="0,0,0,1">
             <StackPanel Orientation="Vertical">
-                <TextBlock FontSize="18" FontWeight="Bold" Foreground="#333">Trade Allocation Bridge</TextBlock>
-                <TextBlock FontSize="12" Foreground="#666" Margin="0,4,0,0">Process trade allocations and manage client mappings</TextBlock>
+                <TextBlock FontSize="18" FontWeight="Bold" Foreground="#333">FixFlow</TextBlock>
+                <TextBlock FontSize="12" Foreground="#666" Margin="0,4,0,0">Trade Allocation Processing and Client Mapping Management</TextBlock>
             </StackPanel>
         </Border>
 
         <!-- Main Content: Tabbed Interface -->
-        <TabControl Grid.Row="1">
+        <TabControl x:Name="MainTabs" Grid.Row="1">
             <!-- Direct Ingestion Tab -->
-            <TabItem Header="📤 Direct Ingestion" Padding="15,10">
+            <TabItem Header="&#x1F4E4; Direct Ingestion" Padding="15,10">
                 <local:DirectIngestionView VerticalAlignment="Top"/>
             </TabItem>
 
             <!-- Map Management Tab -->
-            <TabItem Header="🗺️ Map Management" Padding="15,10">
+            <TabItem Header="&#x1F5FA;&#xFE0F; Map Management" Padding="15,10">
                 <local:MapEditorView/>
             </TabItem>
 
-            <!-- Message History Tab -->
-            <TabItem Header="📋 Message History" Padding="15,10">
-                <local:MessageHistoryView/>
+            <!-- Message Log Tab -->
+            <TabItem Header="&#x1F4CB; Message Log" Padding="15,10">
+                <local:MessageLogView/>
             </TabItem>
             <!-- Settings Tab -->
-            <TabItem Header="⚙️ Global Settings" Padding="15,10">
+            <TabItem Header="&#x2699;&#xFE0F; Global Settings" Padding="15,10">
                 <local:SettingsView/>
             </TabItem>
         </TabControl>
@@ -48,3 +48,4 @@
         <!-- Footer -->
     </Grid>
 </Window>
+

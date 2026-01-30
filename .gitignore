@@ -361,3 +361,15 @@ MigrationBackup/
 
 # Fody - auto-generated XML schema
 FodyWeavers.xsd
+
+# FixFlow generated artifacts
+*.chk
+store/
+src/FixFlow.TradeAllocBridge.WPF/store/
+**/reports/
+attachments/
+*.csv
+*.xlsx
+src/FixFlow.TradeAllocBridge.WPF/Resources/*.ico.2
+src/FixFlow.TradeAllocBridge.WPF/.filenesting.json
+quickfixn/

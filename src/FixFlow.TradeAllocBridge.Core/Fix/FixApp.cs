@@ -1,5 +1,6 @@
 ﻿using System;
 using System.IO;
+using System.Linq;
 using System.Text;
 using Microsoft.Extensions.Logging;
 using QuickFix;
@@ -144,7 +145,12 @@ namespace FixFlow.TradeAllocBridge.Core.Fix
                 // ✅ Record in validation report
                 _validationReport.Add(new ValidationResult(
                     DateTime.Now.ToString("o"),
-                    "", allocID, "", "", "", "", readableStatus, text,
+                    message.IsSetField(49) ? message.GetString(49) : string.Empty,
+                    FormatAllocId(allocID, NormalizeTradeDate(message.IsSetField(75) ? message.GetString(75) : string.Empty)),
+                    message.IsSetField(54) ? message.GetString(54) : string.Empty,
+                    message.IsSetField(55) ? message.GetString(55) : string.Empty,
+                    readableStatus,
+                    string.Empty,
                     message.ToString().Replace('\u0001', '|')
                 ));
 
@@ -191,5 +197,27 @@ namespace FixFlow.TradeAllocBridge.Core.Fix
                 "P" => "AllocationInstructionAck", // FIX4.2 Ack
                 _ => $"Unknown({msgType})"
             };
+
+        private static string NormalizeTradeDate(string? raw)
+        {
+            if (string.IsNullOrWhiteSpace(raw)) return string.Empty;
+            var trimmed = raw.Trim();
+            if (trimmed.Length == 8 && trimmed.All(char.IsDigit))
+            {
+                return trimmed;
+            }
+
+            if (DateTime.TryParse(trimmed, out var parsed))
+            {
+                return parsed.ToString("yyyyMMdd");
+            }
+
+            return string.Empty;
+        }
+
+        private static string FormatAllocId(string allocId, string tradeDate)
+        {
+            return string.IsNullOrWhiteSpace(tradeDate) ? allocId : $"{allocId}_{tradeDate}";
+        }
     }
 }

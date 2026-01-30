@@ -153,7 +153,7 @@ namespace FixFlow.TradeAllocBridge.CLI.Services
                         File.Move(incomingPath, destPath);
                     }
 
-                    _logger.LogInformation("Deployed mapping {File} -> {Dest}", fileName, destPath);
+                    _logger.LogInformation("Deployed mapping {File} -> {Dest} to Email Automation Service", fileName, destPath);
                     OnMappingDeployed?.Invoke(destPath);
                     return;
                 }
