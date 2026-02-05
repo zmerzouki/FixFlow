@@ -370,6 +370,7 @@ src/FixFlow.TradeAllocBridge.WPF/store/
 attachments/
 *.csv
 *.xlsx
+*.xls
 src/FixFlow.TradeAllocBridge.WPF/Resources/*.ico.2
 src/FixFlow.TradeAllocBridge.WPF/.filenesting.json
 quickfixn/
