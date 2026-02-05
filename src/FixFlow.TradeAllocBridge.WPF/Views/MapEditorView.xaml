@@ -82,9 +82,14 @@
         </Border>
 
         <!-- Right Panel: Mapping Details -->
-        <ScrollViewer Grid.Column="1" VerticalScrollBarVisibility="Auto">
-            <Border Padding="20,10,20,9" Margin="0,0,0,-1">
-                <StackPanel Orientation="Vertical">
+        <Grid Grid.Column="1">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="*"/>
+                <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
+            <ScrollViewer Grid.Row="0" VerticalScrollBarVisibility="Auto">
+                <Border Padding="20,10,20,9" Margin="0,0,0,-1">
+                    <StackPanel Orientation="Vertical">
                     <!-- Status Message -->
                     <TextBlock FontSize="12" Foreground="#666" TextWrapping="Wrap" Text="{Binding StatusMessage}" Margin="0,0,0,5"/>
 
@@ -278,7 +283,32 @@
                                             </TransformGroup>
                                         </StackPanel.RenderTransform>
                                         <TextBlock FontSize="10" Foreground="#555" Width="Auto"><Run Text="Tag ID"/></TextBlock>
-                                        <TextBox Text="{Binding NewFieldTag, UpdateSourceTrigger=PropertyChanged}" Padding="9" FontSize="11" HorizontalAlignment="Left" MinWidth="50"/>
+                                        <Grid>
+                                            <TextBox x:Name="TagIdTextBox"
+                                                     Text="{Binding NewFieldTagInput, UpdateSourceTrigger=PropertyChanged}"
+                                                     Padding="9"
+                                                     FontSize="11"
+                                                     HorizontalAlignment="Left"
+                                                     MinWidth="50"/>
+                                            <Popup PlacementTarget="{Binding ElementName=TagIdTextBox}"
+                                                   Placement="Bottom"
+                                                   AllowsTransparency="True"
+                                                   StaysOpen="False"
+                                                   IsOpen="{Binding IsFixFieldSuggestionOpen}">
+                                                <Border Background="#ffffff"
+                                                        BorderBrush="#cfcfcf"
+                                                        BorderThickness="1"
+                                                        CornerRadius="4"
+                                                        Padding="4"
+                                                        MaxWidth="280">
+                                                    <ListBox ItemsSource="{Binding FixFieldSuggestions}"
+                                                             SelectedItem="{Binding SelectedFixFieldSuggestion, Mode=TwoWay}"
+                                                             DisplayMemberPath="Display"
+                                                             MinWidth="220"
+                                                             MaxHeight="180"/>
+                                                </Border>
+                                            </Popup>
+                                        </Grid>
                                     </StackPanel>
                                     <StackPanel Grid.Column="2" Orientation="Vertical" Margin="-70,0,0,0">
                                         <TextBlock FontSize="10" Foreground="#555"><Run Text="Column Name"/></TextBlock>
@@ -315,9 +345,42 @@
                             Height="36"
                             Visibility="{Binding IsEditing, Converter={StaticResource BoolToVisibilityConverter}}" FontWeight="Bold"/>
                     </StackPanel>
+
+                </StackPanel>
+                </Border>
+            </ScrollViewer>
+            <!-- Read-only metadata (sticky footer) -->
+            <Border Grid.Row="1" Padding="20,0,20,12" Background="#ffffff">
+                <StackPanel Orientation="Vertical">
+                    <StackPanel.Style>
+                        <Style TargetType="StackPanel">
+                            <Setter Property="Visibility" Value="Visible"/>
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding IsEditing}" Value="True">
+                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                </DataTrigger>
+                                <DataTrigger Binding="{Binding ShowMappingDetails}" Value="False">
+                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </StackPanel.Style>
+                    <TextBlock FontSize="12" Foreground="#666" FontWeight="SemiBold">
+                        <Run Text="Date Created: "/>
+                        <Run Text="{Binding DateCreated}"/>
+                    </TextBlock>
+                    <TextBlock FontSize="12" Foreground="#666" FontWeight="SemiBold">
+                        <Run Text="Date Modified: "/>
+                        <Run Text="{Binding DateModified}"/>
+                    </TextBlock>
+                    <TextBlock FontSize="12" Foreground="#666" FontWeight="SemiBold">
+                        <Run Text="Email Automation Status: "/>
+                        <!--<Run Text="{Binding EmailAutomationStatus}"/>-->
+                        <Run Text="Disabled"/>
+                    </TextBlock>
                 </StackPanel>
             </Border>
-        </ScrollViewer>
+        </Grid>
     </Grid>
 </UserControl>
 

@@ -35,9 +35,7 @@
                               DisplayMemberPath="Name"
                               Padding="8"
                               FontSize="11"
-                              Margin="10,0,0,0"
-                              Width="200"
-                              Height="28"/>
+                              Margin="10,0,0,0" Width="200"/>
                 </StackPanel>
                 <TextBlock Grid.Column="2"
                            Text="{Binding StatusMessage}"
@@ -56,6 +54,7 @@
                   FontSize="10"
                   BorderBrush="#d0d0d0"
                   BorderThickness="1"
+                  Margin="0,0,-2,0"
                   SelectionMode="Extended"
                   SelectionUnit="FullRow"
                   ItemsSource="{Binding Entries}">
@@ -65,14 +64,14 @@
                 </ContextMenu>
             </DataGrid.ContextMenu>
             <DataGrid.Columns>
-                <DataGridTextColumn Header="Timestamp" Width="150" Binding="{Binding Timestamp, StringFormat='yyyy-MM-dd HH:mm:ss'}"/>
-                <DataGridTextColumn Header="Client" Width="90" Binding="{Binding ClientId}"/>
-                <DataGridTextColumn Header="AllocID" Width="140" Binding="{Binding AllocId}"/>
-                <DataGridTextColumn Header="Side" Width="70" Binding="{Binding Side}"/>
-                <DataGridTextColumn Header="Symbol" Width="80" Binding="{Binding Symbol}"/>
+                <DataGridTextColumn Header="Timestamp" Width="120" Binding="{Binding Timestamp, StringFormat='yyyy-MM-dd HH:mm:ss'}"/>
+                <DataGridTextColumn Header="Client" Width="80" Binding="{Binding ClientId}"/>
+                <DataGridTextColumn Header="AllocID" Width="100" Binding="{Binding AllocId}"/>
+                <DataGridTextColumn Header="Side" Width="90" Binding="{Binding Side, Converter={StaticResource SideDisplayConverter}}"/>
+                <DataGridTextColumn Header="Symbol" Width="50" Binding="{Binding Symbol}"/>
                 <DataGridTextColumn Header="Status" Width="90" Binding="{Binding ProcessingStatus}"/>
-                <DataGridTextColumn Header="Error Details" Width="240" Binding="{Binding ErrorDetails}"/>
-                <DataGridTextColumn Header="Raw FIX" Width="*" Binding="{Binding RawFixMessage}"/>
+                <DataGridTextColumn Header="Raw FIX" Width="240" Binding="{Binding RawFixMessage}"/>
+                <DataGridTextColumn Header="Error Details" Width="*" Binding="{Binding ErrorDetails}"/>
             </DataGrid.Columns>
         </DataGrid>
     </Grid>

@@ -595,7 +595,7 @@ namespace FixFlow.TradeAllocBridge.WPF.ViewModels
                 if (missingTrades.Any())
                 {
                     FailedAllocationsCount = missingCount;
-                    missingRequiredMessage = $"{missingCount} out of {totalTrades} Allocations have failed to process because it is missing required value(s): {string.Join(", ", missingTags)}.";
+                    missingRequiredMessage = $"{missingCount} out of {totalTrades} Allocation(s) failed to process. Missing required value(s): {string.Join(", ", missingTags)}.";
                     StatusMessage = missingRequiredMessage;
                     ResultFailureMessage = missingRequiredMessage;
                     ResultMessage = missingRequiredMessage;
@@ -843,7 +843,15 @@ namespace FixFlow.TradeAllocBridge.WPF.ViewModels
                     string sendResult;
                     if (IsDryRun)
                     {
-                        sendResult = "OK";
+                        var validationErrors = _fixClient.ValidateAllocation(mergedMsg);
+                        if (validationErrors.Count > 0)
+                        {
+                            sendResult = string.Join("; ", validationErrors);
+                        }
+                        else
+                        {
+                            sendResult = "OK";
+                        }
                     }
                     else if (!canSendFixMessages)
                     {
@@ -852,8 +860,9 @@ namespace FixFlow.TradeAllocBridge.WPF.ViewModels
                         if (!groupErrors.ContainsKey(groupKey))
                         {
                             var groupTotal = groupTotals.TryGetValue(groupKey, out var count) ? count : tradeCount;
+                            var failedAllocationsCount = totalTrades - groupTotal;
                             var cancelMessage =
-                                $"{groupTotal} out of {AllocationsSubmittedCount} allocations identified for group trade {side}/{symbol} were successfully merged. Fix message cannot be sent because one or more related group trades have error(s). Allocations processing cancelled.";
+                                $"{groupTotal} out of {AllocationsSubmittedCount} allocations identified for group trade {side}/{symbol} were successfully merged. Fix message cannot be sent because {failedAllocationsCount} trades have error(s). Allocations processing cancelled.";
                             AddGroupError(symbol, side, cancelMessage);
                         }
                     }
@@ -864,7 +873,7 @@ namespace FixFlow.TradeAllocBridge.WPF.ViewModels
                     if (sendResult != "OK")
                     {
                         failedFixMessages++;
-                        if (canSendFixMessages)
+                        if (!string.Equals(sendResult, "Skipped", StringComparison.OrdinalIgnoreCase))
                         {
                             AddGroupError(symbol, side, sendResult);
                         }
@@ -905,43 +914,17 @@ namespace FixFlow.TradeAllocBridge.WPF.ViewModels
                     ));
 
                     GeneratedMessages.Add(new FixMessageResult
-                        {
-                            AllocId = allocId,
-                            Symbol = symbol,
-                            Side = side,
-                            TradeCount = tradeCount,
-                            RawFix = mergedMsg.ToString().Replace('\u0001', '|'),
-                            Status = sendResult == "OK" ? "Sent" : "Failed",
+                    {
+                        AllocId = allocId,
+                        Symbol = symbol,
+                        Side = side,
+                        TradeCount = tradeCount,
+                        RawFix = mergedMsg.ToString().Replace('\u0001', '|'),
+                        Status = sendResult == "OK" ? "Sent" : "Failed",
                         ErrorMessage = sendResult == "OK" ? string.Empty : sendResult,
                         Timestamp = DateTime.Now
                     });
                 }
-
-                if (reportEntries.Count > 0)
-                {
-                    foreach (var entry in reportEntries)
-                    {
-                        string errorDetails = string.Empty;
-                        if (groupErrors.Count > 0)
-                        {
-                            var currentKey = $"{entry.Symbol}|{entry.Side}";
-                            if (groupErrors.TryGetValue(currentKey, out var errors))
-                            {
-                                    var details = errors
-                                        .Distinct()
-                                        .ToList();
-                                if (details.Count > 0)
-                                {
-                                    errorDetails = string.Join(" | ", details);
-                                }
-                            }
-                        }
-
-                        _validationReport.Add(entry with { ErrorDetails = errorDetails });
-                    }
-                }
-
-                _validationReport.Save();
 
                 if (!IsDryRun)
                 {
@@ -952,7 +935,7 @@ namespace FixFlow.TradeAllocBridge.WPF.ViewModels
                 SuccessfulAllocationsCount = Math.Max(AllocationsSubmittedCount - FailedAllocationsCount, SuccessfulAllocationsCount);
 
                 ProcessProgress = 100;
-                var successMessage = $"{validTrades.Count} out of {AllocationsSubmittedCount} allocations have successfully processed and merged across {groupedBySymbolAndSide.Count} symbol/side group(s).";
+                var successMessage = $"{validTrades.Count} out of {AllocationsSubmittedCount} allocations successfully processed and merged across {groupedBySymbolAndSide.Count} symbol/side group(s).";
                 if (!IsDryRun && successfulFixMessages > 0)
                 {
                     successMessage = $"{successMessage} {successfulFixMessages} Fix message(s) successfully sent to {targetComp}.";
@@ -960,9 +943,13 @@ namespace FixFlow.TradeAllocBridge.WPF.ViewModels
                 string? fixSendFailureMessage = null;
                 if (!IsDryRun && failedFixMessages > 0)
                 {
-                    fixSendFailureMessage = $"{failedFixMessages} Fix message(s) have failed to send.";
+                    fixSendFailureMessage = $"{failedFixMessages} Fix message(s) failed to send.";
                 }
-                var failureMessage = string.Join(" ", new[] { missingRequiredMessage, fixSendFailureMessage }.Where(m => !string.IsNullOrWhiteSpace(m)));
+                var groupErrorSummary = groupErrors.Count > 0
+                    ? string.Join(" | ", groupErrors.Values.SelectMany(v => v).Distinct())
+                    : null;
+                var failureMessage = string.Join(" ", new[] { missingRequiredMessage, fixSendFailureMessage, groupErrorSummary }
+                    .Where(m => !string.IsNullOrWhiteSpace(m)));
                 ResultSuccessMessage = successMessage;
                 ResultFailureMessage = failureMessage;
                 StatusMessage = string.IsNullOrEmpty(ResultFailureMessage) ? successMessage : ResultFailureMessage;
@@ -972,6 +959,59 @@ namespace FixFlow.TradeAllocBridge.WPF.ViewModels
                 {
                     SelectedFilePath = null;
                 }
+
+                var hasProcessingErrors = missingTrades.Any() || buildFailures > 0 || failedFixMessages > 0 || groupErrors.Count > 0;
+                string ResolveErrorDetails(ValidationResult entry)
+                {
+                    if (groupErrors.Count == 0)
+                    {
+                        return string.Empty;
+                    }
+
+                    var currentKey = $"{entry.Symbol}|{entry.Side}";
+                    if (!groupErrors.TryGetValue(currentKey, out var errors))
+                    {
+                        return string.Empty;
+                    }
+
+                    var details = errors
+                        .Distinct()
+                        .ToList();
+                    return details.Count > 0 ? string.Join(" | ", details) : string.Empty;
+                }
+
+                if (IsDryRun)
+                {
+                    var dryRunStatus = hasProcessingErrors ? "Failed" : "Valid. Not Sent";
+                    foreach (var entry in reportEntries)
+                    {
+                        var errorDetails = ResolveErrorDetails(entry);
+                        var sideDisplay = FixValueNormalizer.FormatSideDisplay(entry.Side);
+                        _validationReport.Add(entry with
+                        {
+                            Side = sideDisplay,
+                            ProcessingStatus = dryRunStatus,
+                            ErrorDetails = errorDetails
+                        });
+                    }
+
+                    foreach (var message in GeneratedMessages)
+                    {
+                        message.Status = dryRunStatus;
+                        message.ErrorMessage = hasProcessingErrors ? ResultFailureMessage : string.Empty;
+                    }
+                }
+                else if (reportEntries.Count > 0)
+                {
+                    foreach (var entry in reportEntries)
+                    {
+                        var errorDetails = ResolveErrorDetails(entry);
+                        var sideDisplay = FixValueNormalizer.FormatSideDisplay(entry.Side);
+                        _validationReport.Add(entry with { Side = sideDisplay, ErrorDetails = errorDetails });
+                    }
+                }
+
+                _validationReport.Save();
 
                 _logger.LogInformation(ResultMessage);
             }

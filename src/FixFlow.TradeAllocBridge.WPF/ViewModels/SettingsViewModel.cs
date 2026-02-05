@@ -362,6 +362,12 @@ namespace FixFlow.TradeAllocBridge.WPF.ViewModels
         private static string? ResolveWpfAppSettingsPath()
         {
             var baseDir = AppContext.BaseDirectory;
+            var localAppSettings = Path.Combine(baseDir, "appsettings.json");
+            if (File.Exists(localAppSettings))
+            {
+                return localAppSettings;
+            }
+
             var solutionRoot = FindAncestorWithFile(baseDir, "*.sln", maxLevels: 8);
             if (string.IsNullOrWhiteSpace(solutionRoot))
             {
