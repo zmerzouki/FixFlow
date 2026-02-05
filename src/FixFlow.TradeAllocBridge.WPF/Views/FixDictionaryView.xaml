@@ -1,0 +1,148 @@
+<UserControl x:Class="FixFlow.TradeAllocBridge.WPF.Views.FixDictionaryView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" 
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008" 
+             mc:Ignorable="d"
+             Background="#ffffff">
+    <Grid>
+        <ScrollViewer VerticalScrollBarVisibility="Auto">
+            <StackPanel Margin="20" Orientation="Vertical">
+                <TextBlock FontSize="14" FontWeight="SemiBold" Foreground="#333" Margin="0,0,0,10" Text="FIX Field Search"/>
+
+                <Grid Margin="0,0,0,12">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="200"/>
+                        <ColumnDefinition Width="260"/>
+                        <ColumnDefinition Width="260"/>
+                    </Grid.ColumnDefinitions>
+
+                    <StackPanel Grid.Column="0" Margin="0,0,12,0">
+                        <TextBlock FontSize="12" Foreground="#555" Text="Select Dictionary" FontWeight="SemiBold"/>
+                        <ComboBox ItemsSource="{Binding DictionaryOptions}"
+                                  SelectedItem="{Binding SelectedDictionary}"
+                                  DisplayMemberPath="Display" BorderThickness="1,1,1,1" FontSize="12" Height="28.63" Padding="6"/>
+                    </StackPanel>
+
+                    <StackPanel Grid.Column="1" Margin="0,0,12,0">
+                        <TextBlock FontSize="12" Foreground="#555" FontWeight="SemiBold">Message Name</TextBlock>
+                        <Grid>
+                            <TextBox x:Name="MessageSearchTextBox"
+                                     Text="{Binding MessageSearchInput, UpdateSourceTrigger=PropertyChanged}"
+                                     Padding="6"
+                                     FontSize="12"
+                                     PreviewKeyDown="MessageSearchTextBox_OnPreviewKeyDown"/>
+                            <Popup PlacementTarget="{Binding ElementName=MessageSearchTextBox}"
+                                   Placement="Bottom"
+                                   AllowsTransparency="True"
+                                   StaysOpen="False"
+                                   IsOpen="{Binding IsMessageSuggestionOpen}">
+                                <Border Background="#ffffff"
+                                        BorderBrush="#cfcfcf"
+                                        BorderThickness="1"
+                                        CornerRadius="4"
+                                        Padding="4"
+                                        MaxWidth="300">
+                                    <ListBox x:Name="MessageSuggestionsListBox"
+                                             ItemsSource="{Binding MessageSuggestions}"
+                                             SelectedItem="{Binding SelectedMessageSuggestion, Mode=TwoWay}"
+                                             DisplayMemberPath="Display"
+                                             MinWidth="240"
+                                             MaxHeight="180"
+                                             PreviewMouseLeftButtonUp="MessageSuggestionsListBox_OnPreviewMouseLeftButtonUp"/>
+                                </Border>
+                            </Popup>
+                        </Grid>
+                    </StackPanel>
+
+                    <StackPanel Grid.Column="2">
+                        <TextBlock FontSize="12" Foreground="#555"><Run FontWeight="SemiBold" Text="Tag Number or Name"/></TextBlock>
+                        <Grid>
+                            <TextBox x:Name="TagSearchTextBox"
+                                     Text="{Binding TagSearchInput, UpdateSourceTrigger=PropertyChanged}"
+                                     Padding="6"
+                                     FontSize="12"
+                                     PreviewKeyDown="TagSearchTextBox_OnPreviewKeyDown"/>
+                            <Popup PlacementTarget="{Binding ElementName=TagSearchTextBox}"
+                                   Placement="Bottom"
+                                   AllowsTransparency="True"
+                                   StaysOpen="False"
+                                   IsOpen="{Binding IsTagSuggestionOpen}">
+                                <Border Background="#ffffff"
+                                        BorderBrush="#cfcfcf"
+                                        BorderThickness="1"
+                                        CornerRadius="4"
+                                        Padding="4"
+                                        MaxWidth="300">
+                                    <ListBox x:Name="TagSuggestionsListBox"
+                                             ItemsSource="{Binding TagSuggestions}"
+                                             SelectedItem="{Binding SelectedTagSuggestion, Mode=TwoWay}"
+                                             DisplayMemberPath="Display"
+                                             MinWidth="240"
+                                             MaxHeight="180"
+                                             PreviewMouseLeftButtonUp="TagSuggestionsListBox_OnPreviewMouseLeftButtonUp"/>
+                                </Border>
+                            </Popup>
+                        </Grid>
+                    </StackPanel>
+                </Grid>
+
+                <TextBlock FontSize="12" Foreground="#666" Text="{Binding StatusMessage}" Margin="0,0,0,8"/>
+
+                <Border BorderBrush="#e0e0e0" BorderThickness="1" Padding="12" Background="#fafafa">
+                    <StackPanel Orientation="Vertical">
+                        <TextBlock FontSize="14" FontWeight="SemiBold" Foreground="#333" Text="Result" Margin="0,0,0,6"/>
+
+                        <WrapPanel Orientation="Horizontal"
+                                   Visibility="{Binding HasTagHeader, Converter={StaticResource BoolToVisibilityConverter}}">
+                            <TextBlock FontSize="12" Foreground="#222" Text="{Binding TagHeader}"/>
+                            <TextBlock FontSize="12"
+                                       Foreground="#222"
+                                       Visibility="{Binding HasRequiredMessageInfo, Converter={StaticResource BoolToVisibilityConverter}}">
+                                <Run Text=" | "/>
+                                <Run Text="{Binding RequiredMessageInfo, Mode=OneWay}"/>
+                                <Run Text=" "/>
+                                <Run Text="{Binding RequiredMessageAnswer, Mode=OneWay}">
+                                    <Run.Style>
+                                        <Style TargetType="Run">
+                                            <Setter Property="Foreground" Value="#222"/>
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding IsRequiredInMessage}" Value="True">
+                                                    <Setter Property="Foreground" Value="#d13438"/>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </Run.Style>
+                                </Run>
+                            </TextBlock>
+                        </WrapPanel>
+
+                        <StackPanel Margin="0,8,0,0"
+                                    Visibility="{Binding HasTagEnums, Converter={StaticResource BoolToVisibilityConverter}}">
+                            <TextBlock FontSize="12" FontWeight="SemiBold" Foreground="#333" Text="Valid Enumeration:" Margin="0,0,0,4"/>
+                            <ItemsControl ItemsSource="{Binding TagEnumResults}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <TextBlock FontSize="12" Foreground="#444" Text="{Binding}"/>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </StackPanel>
+
+                        <StackPanel Margin="0,8,0,0"
+                                    Visibility="{Binding ShowTagMessages, Converter={StaticResource BoolToVisibilityConverter}}">
+                            <TextBlock FontSize="12" FontWeight="SemiBold" Foreground="#333" Text="Messages using this tag:" Margin="0,0,0,4"/>
+                            <ItemsControl ItemsSource="{Binding TagMessageResults}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <TextBlock FontSize="12" Foreground="#444" Text="{Binding}"/>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </StackPanel>
+                    </StackPanel>
+                </Border>
+            </StackPanel>
+        </ScrollViewer>
+    </Grid>
+</UserControl>

@@ -84,10 +84,12 @@ namespace FixFlow.TradeAllocBridge.WPF
             services.AddSingleton<MapEditorViewModel>();
             services.AddSingleton<SettingsViewModel>();
             services.AddSingleton<MessageLogViewModel>();
+            services.AddSingleton<FixDictionaryViewModel>();
             services.AddTransient<MapEditorView>();
             services.AddTransient<SettingsView>();
             services.AddTransient<DirectIngestionView>();
             services.AddTransient<MessageLogView>();
+            services.AddTransient<FixDictionaryView>();
         }
 
         protected override void OnExit(ExitEventArgs e)
