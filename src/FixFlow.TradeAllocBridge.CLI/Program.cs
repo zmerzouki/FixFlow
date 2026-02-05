@@ -395,7 +395,7 @@ namespace FixFlow.TradeAllocBridge.CLI
 
                     if (missingTrades.Any())
                     {
-                        Console.WriteLine($"{missingTrades.Count} out of {totalTrades} Allocations have failed to process because it is missing required value(s): {string.Join(", ", missingTags)}");
+                        Console.WriteLine($"{missingTrades.Count} out of {totalTrades} Allocation(s) failed to process. Missing required value(s): {string.Join(", ", missingTags)}");
                     }
 
                     var groupedBySymbolAndSide = trades
@@ -547,8 +547,9 @@ namespace FixFlow.TradeAllocBridge.CLI
                             if (!groupErrors.ContainsKey(groupKey))
                             {
                                 var groupTotal = groupTotals.TryGetValue(groupKey, out var count) ? count : tradeCount;
+                                var failedAllocationsCount = totalTrades - groupTotal;
                                 var cancelMessage =
-                                    $" {groupTotal} out of {totalTrades} allocations identified for group trade {side}/{symbol} were successfully merged. Fix message cannot be sent because one or more related group trades have error(s). Allocations processing cancelled.";
+                                    $" {groupTotal} out of {totalTrades} Allocations identified for group trade {side}/{symbol} were successfully merged. Fix message cannot be sent because {failedAllocationsCount} trades have error(s). Allocations processing cancelled.";
                                 AddGroupError(symbol, side, cancelMessage);
                             }
                         }
@@ -647,7 +648,8 @@ namespace FixFlow.TradeAllocBridge.CLI
                                 }
                             }
 
-                            report.Add(entry with { ErrorDetails = errorDetails });
+                            var sideDisplay = FixValueNormalizer.FormatSideDisplay(entry.Side);
+                            report.Add(entry with { Side = sideDisplay, ErrorDetails = errorDetails });
                         }
                     }
                 }

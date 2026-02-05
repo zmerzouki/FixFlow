@@ -60,6 +60,50 @@ public static class FixValueNormalizer
         };
     }
 
+    public static string FormatSideDisplay(string? raw)
+    {
+        var trimmed = raw?.Trim() ?? string.Empty;
+        if (trimmed.Length == 0)
+        {
+            return string.Empty;
+        }
+
+        var upper = trimmed.ToUpperInvariant();
+        string? normalized = null;
+
+        if (IsSideEnumValue(upper))
+        {
+            normalized = upper;
+        }
+        else if (IsKnownSideToken(upper))
+        {
+            normalized = NormalizeSide(upper);
+        }
+
+        if (string.IsNullOrWhiteSpace(normalized))
+        {
+            return trimmed;
+        }
+
+        var description = normalized switch
+        {
+            "1" => "BUY",
+            "2" => "SELL",
+            "3" => "BUY_MINUS",
+            "4" => "SELL_PLUS",
+            "5" => "SELL_SHORT",
+            "6" => "SELL_SHORT_EXEMPT",
+            "7" => "UNDISCLOSED",
+            "8" => "CROSS",
+            "9" => "CROSS_SHORT",
+            _ => string.Empty
+        };
+
+        return string.IsNullOrWhiteSpace(description)
+            ? normalized
+            : $"{normalized} ({description})";
+    }
+
     /// <summary>
     /// Determines SecurityID and IDSource based on CUSIP / ISIN / SEDOL priority.
     /// </summary>
@@ -106,6 +150,20 @@ public static class FixValueNormalizer
         if (value.Contains("SHORT")) return "5";
         return "1";
     }
+
+    private static bool IsSideEnumValue(string value) =>
+        value.Length == 1 && value[0] >= '1' && value[0] <= '9';
+
+    private static bool IsKnownSideToken(string value) =>
+        value == "BUY"
+        || value == "B"
+        || value == "COVER"
+        || value == "SELL"
+        || value == "S"
+        || value == "LONG"
+        || value.Contains("SSE")
+        || value.Contains("SHORT EXEMPT")
+        || value.Contains("SHORT");
 
         private static string MapCommType(string value)
     {
