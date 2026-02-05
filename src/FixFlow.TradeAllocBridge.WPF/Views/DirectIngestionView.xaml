@@ -69,7 +69,7 @@
                         <TextBlock FontSize="13" FontWeight="SemiBold" TextAlignment="Center" Foreground="#333" Text="Drag and drop a spreadsheet here"/>
                         <!-- Selected File Info -->
                         <TextBlock FontSize="14" FontWeight="Bold" Foreground="#FFFEFDFC" 
-                       Visibility="{Binding SelectedFilePath, Converter={StaticResource StringToVisibilityConverter}}" Background="#FF4E566A"><Run Text="Selected File: "/><Run Text="{Binding SelectedFileName, Mode=OneWay}"/></TextBlock>
+                       Visibility="{Binding SelectedFilePath, Converter={StaticResource StringToVisibilityConverter}}" Background="#FF4E566A" TextAlignment="Center"><Run Text="Selected File: "/><Run Text="{Binding SelectedFileName, Mode=OneWay}"/></TextBlock>
                         <TextBlock FontSize="11" TextAlignment="Center" Foreground="#666" Text="OR"/>
                         <Button x:Name="BrowseButton" 
                                 Content="Browse File"

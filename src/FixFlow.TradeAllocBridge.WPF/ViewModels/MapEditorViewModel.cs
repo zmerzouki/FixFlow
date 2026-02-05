@@ -10,6 +10,8 @@ using Microsoft.Extensions.Logging;
 using FixFlow.TradeAllocBridge.Core.Config;
 using FixFlow.TradeAllocBridge.Core.Mapping;
 using System.ComponentModel;
+using System;
+using System.Xml.Linq;
 
 namespace FixFlow.TradeAllocBridge.WPF.ViewModels
 {
@@ -29,6 +31,10 @@ namespace FixFlow.TradeAllocBridge.WPF.ViewModels
         private string _deliverToCompId = string.Empty;
         private string _newFieldName = string.Empty;
         private string _newFieldTag = string.Empty;
+        private string _newFieldTagInput = string.Empty;
+        private bool _isFixFieldSuggestionOpen;
+        private FixFieldOption? _selectedFixFieldSuggestion;
+        private bool _suppressFixFieldSuggestion;
         private bool _isProgrammaticSenderCompSet;
         private bool _isEditing;
         private bool _isFirstVisit = true;
@@ -38,11 +44,81 @@ namespace FixFlow.TradeAllocBridge.WPF.ViewModels
         private bool _hasUnsavedChanges;
         private bool _suppressChangeTracking;
         private string _incomingFolderPath = string.Empty;
+        private string _dateCreated = string.Empty;
+        private string _dateModified = string.Empty;
+        private string _emailAutomationStatus = "Inactive";
         private const string DefaultClientIdPlaceholder = "CLIENT1";
         private const string DefaultSenderDomainPlaceholder = "ACME.COM";
         private const string DefaultSenderCompIdPlaceholder = "FIXFLOW";
         private const string DefaultTargetCompIdPlaceholder = "BROKER";
         private static readonly string[] RequiredFixTags = { "54", "55", "79", "80", "153" };
+        private static readonly string[] Fix42FieldNames =
+        {
+            "Side",
+            "Symbol",
+            "SymbolSfx",
+            "SecurityID",
+            "IDSource",
+            "SecurityType",
+            "MaturityMonthYear",
+            "MaturityDay",
+            "PutOrCall",
+            "StrikePrice",
+            "OptAttribute",
+            "ContractMultiplier",
+            "CouponRate",
+            "SecurityExchange",
+            "Issuer",
+            "EncodedIssuerLen",
+            "EncodedIssuer",
+            "SecurityDesc",
+            "EncodedSecurityDescLen",
+            "EncodedSecurityDesc",
+            "Shares",
+            "LastMkt",
+            "TradingSessionID",
+            "AvgPx",
+            "Currency",
+            "AvgPrxPrecision",
+            "TradeDate",
+            "TransactTime",
+            "SettlmntTyp",
+            "FutSettDate",
+            "GrossTradeAmt",
+            "NetMoney",
+            "OpenClose",
+            "Text",
+            "EncodedTextLen",
+            "EncodedText",
+            "NumDaysInterest",
+            "AccruedInterestRate",
+            "AllocAccount",
+            "AllocPrice",
+            "AllocShares",
+            "ProcessCode",
+            "BrokerOfCredit",
+            "NotifyBrokerOfCredit",
+            "AllocHandlInst",
+            "AllocText",
+            "EncodedAllocTextLen",
+            "EncodedAllocText",
+            "ExecBroker",
+            "ClientID",
+            "Commission",
+            "CommType",
+            "AllocAvgPx",
+            "AllocNetMoney",
+            "SettlCurrAmt",
+            "SettlCurrency",
+            "SettlCurrFxRate",
+            "SettlCurrFxRateCalc",
+            "AccruedInterestAmt",
+            "SettlInstMode",
+            "MiscFeeAmt",
+            "MiscFeeCurr",
+            "MiscFeeType"
+        };
+        private readonly List<FixFieldOption> _fixFieldOptions;
 
         // Available FIX tags for dropdowns
         public readonly Dictionary<int, string> CommonFixTags = new()
@@ -55,10 +131,6 @@ namespace FixFlow.TradeAllocBridge.WPF.ViewModels
             { 44, "Price" },
             { 54, "Side (Buy=1, Sell=2)" },
             { 55, "Symbol" },
-            { 56, "TargetCompID" },
-            { 57, "TargetSubID" },
-            { 70, "AllocID" },
-            { 71, "AllocTransType" },
             { 75, "TradeDate" },
             { 76, "ExecRefID" },
             { 78, "NoAllocs" },
@@ -77,6 +149,7 @@ namespace FixFlow.TradeAllocBridge.WPF.ViewModels
 
         public ObservableCollection<string> AvailableMappings { get; }
         public ObservableCollection<KeyValuePair<string, string>> FieldMappings { get; }
+        public ObservableCollection<FixFieldOption> FixFieldSuggestions { get; }
         public ICommand NewMappingCommand { get; }
         public ICommand EditMappingCommand { get; }
         public ICommand ValidateMappingCommand { get; }
@@ -104,6 +177,8 @@ namespace FixFlow.TradeAllocBridge.WPF.ViewModels
 
             AvailableMappings = new ObservableCollection<string>();
             FieldMappings = new ObservableCollection<KeyValuePair<string, string>>();
+            FixFieldSuggestions = new ObservableCollection<FixFieldOption>();
+            _fixFieldOptions = LoadFixFieldOptions();
 
             NewMappingCommand = new RelayCommand(NewMapping);
             EditMappingCommand = new RelayCommand(EditMapping, () => SelectedMapping != null);
@@ -171,8 +246,12 @@ namespace FixFlow.TradeAllocBridge.WPF.ViewModels
             try
             {
                 var mapFile = Path.Combine(_configDir, $"{clientId}_map.json");
+                DateCreated = string.Empty;
+                DateModified = string.Empty;
+                EmailAutomationStatus = "Inactive";
                 if (File.Exists(mapFile))
                 {
+                    UpdateMappingMetadata(mapFile, clientId);
                     _currentMapping = MappingConfig.Load(mapFile);
                     _isProgrammaticSenderCompSet = true;
                     SenderCompId = _currentMapping.Predefined?.SenderCompID ?? string.Empty;
@@ -205,6 +284,41 @@ namespace FixFlow.TradeAllocBridge.WPF.ViewModels
             {
                 _suppressChangeTracking = false;
             }
+        }
+
+        private void UpdateMappingMetadata(string mapFile, string clientId)
+        {
+            try
+            {
+                var info = new FileInfo(mapFile);
+                DateCreated = info.CreationTime.ToString("M/d/yyyy h:mm tt");
+                DateModified = info.LastWriteTime.ToString("M/d/yyyy h:mm tt");
+            }
+            catch
+            {
+                DateCreated = string.Empty;
+                DateModified = string.Empty;
+            }
+
+            try
+            {
+                if (!string.IsNullOrWhiteSpace(_cliConfigsDir))
+                {
+                    var cliMap = Path.Combine(_cliConfigsDir, $"{clientId}_map.json");
+                    if (File.Exists(cliMap))
+                    {
+                        var deployTime = File.GetLastWriteTime(cliMap);
+                        EmailAutomationStatus = $"Active as of {deployTime:M/d/yyyy h:mm tt}";
+                        return;
+                    }
+                }
+            }
+            catch
+            {
+                // ignore and fall through to inactive
+            }
+
+            EmailAutomationStatus = "Inactive";
         }
 
         public string ClientId
@@ -354,6 +468,45 @@ namespace FixFlow.TradeAllocBridge.WPF.ViewModels
             }
         }
 
+        public string DateCreated
+        {
+            get => _dateCreated;
+            set
+            {
+                if (_dateCreated != value)
+                {
+                    _dateCreated = value;
+                    OnPropertyChanged(nameof(DateCreated));
+                }
+            }
+        }
+
+        public string DateModified
+        {
+            get => _dateModified;
+            set
+            {
+                if (_dateModified != value)
+                {
+                    _dateModified = value;
+                    OnPropertyChanged(nameof(DateModified));
+                }
+            }
+        }
+
+        public string EmailAutomationStatus
+        {
+            get => _emailAutomationStatus;
+            set
+            {
+                if (_emailAutomationStatus != value)
+                {
+                    _emailAutomationStatus = value;
+                    OnPropertyChanged(nameof(EmailAutomationStatus));
+                }
+            }
+        }
+
         public string NewFieldName
         {
             get => _newFieldName;
@@ -382,6 +535,57 @@ namespace FixFlow.TradeAllocBridge.WPF.ViewModels
             }
         }
 
+        public string NewFieldTagInput
+        {
+            get => _newFieldTagInput;
+            set
+            {
+                if (_newFieldTagInput != value)
+                {
+                    _newFieldTagInput = value ?? string.Empty;
+                    OnPropertyChanged(nameof(NewFieldTagInput));
+                    UpdateFixFieldSuggestions();
+                }
+            }
+        }
+
+        public bool IsFixFieldSuggestionOpen
+        {
+            get => _isFixFieldSuggestionOpen;
+            set
+            {
+                if (_isFixFieldSuggestionOpen != value)
+                {
+                    _isFixFieldSuggestionOpen = value;
+                    OnPropertyChanged(nameof(IsFixFieldSuggestionOpen));
+                }
+            }
+        }
+
+        public FixFieldOption? SelectedFixFieldSuggestion
+        {
+            get => _selectedFixFieldSuggestion;
+            set
+            {
+                if (_selectedFixFieldSuggestion != value)
+                {
+                    _selectedFixFieldSuggestion = value;
+                    OnPropertyChanged(nameof(SelectedFixFieldSuggestion));
+                    if (value != null)
+                    {
+                        _suppressFixFieldSuggestion = true;
+                        NewFieldTag = value.Tag;
+                        _newFieldTagInput = value.Tag;
+                        OnPropertyChanged(nameof(NewFieldTagInput));
+                        _suppressFixFieldSuggestion = false;
+                        IsFixFieldSuggestionOpen = false;
+                        FixFieldSuggestions.Clear();
+                        RefreshFieldCommands();
+                    }
+                }
+            }
+        }
+
         public KeyValuePair<string, string>? SelectedFieldMapping
         {
             get => _selectedFieldMapping;
@@ -400,6 +604,7 @@ namespace FixFlow.TradeAllocBridge.WPF.ViewModels
                 {
                     NewFieldName = value.Value.Key;
                     NewFieldTag = value.Value.Value;
+                    NewFieldTagInput = value.Value.Value;
                 }
                 OnPropertyChanged(nameof(SelectedFieldMapping));
                 RefreshFieldCommands();
@@ -486,6 +691,128 @@ namespace FixFlow.TradeAllocBridge.WPF.ViewModels
             OnPropertyChanged(nameof(CanMoveFieldUp));
             OnPropertyChanged(nameof(CanMoveFieldDown));
             CommandManager.InvalidateRequerySuggested();
+        }
+
+        private void UpdateFixFieldSuggestions()
+        {
+            if (_suppressFixFieldSuggestion)
+            {
+                return;
+            }
+
+            FixFieldSuggestions.Clear();
+            IsFixFieldSuggestionOpen = false;
+
+            var input = _newFieldTagInput?.Trim() ?? string.Empty;
+            if (string.IsNullOrWhiteSpace(input))
+            {
+                NewFieldTag = string.Empty;
+                RefreshFieldCommands();
+                return;
+            }
+
+            if (input.All(char.IsDigit))
+            {
+                NewFieldTag = input;
+                RefreshFieldCommands();
+                return;
+            }
+
+            NewFieldTag = string.Empty;
+
+            if (!char.IsLetter(input[0]))
+            {
+                RefreshFieldCommands();
+                return;
+            }
+
+            var existingTags = FieldMappings
+                .Select(f => f.Value?.Trim() ?? string.Empty)
+                .Where(tag => !string.IsNullOrWhiteSpace(tag))
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+            var matches = input.Length == 1
+                ? _fixFieldOptions
+                    .Where(option => !existingTags.Contains(option.Tag) &&
+                                     option.Name.StartsWith(input, StringComparison.OrdinalIgnoreCase))
+                    .ToList()
+                : _fixFieldOptions
+                    .Where(option => !existingTags.Contains(option.Tag) &&
+                                     option.Name.Contains(input, StringComparison.OrdinalIgnoreCase))
+                    .ToList();
+
+            foreach (var match in matches.Take(20))
+            {
+                FixFieldSuggestions.Add(match);
+            }
+
+            IsFixFieldSuggestionOpen = FixFieldSuggestions.Count > 0;
+            RefreshFieldCommands();
+        }
+
+        private List<FixFieldOption> LoadFixFieldOptions()
+        {
+            var options = new List<FixFieldOption>();
+            var dictionaryPath = ResolveFixDictionaryPath();
+            if (string.IsNullOrWhiteSpace(dictionaryPath) || !File.Exists(dictionaryPath))
+            {
+                return options;
+            }
+
+            try
+            {
+                var doc = XDocument.Load(dictionaryPath);
+                var fieldsElement = doc.Root?.Element("fields");
+                if (fieldsElement == null)
+                {
+                    return options;
+                }
+
+                var allowed = new HashSet<string>(Fix42FieldNames, StringComparer.OrdinalIgnoreCase);
+                foreach (var field in fieldsElement.Elements("field"))
+                {
+                    var name = field.Attribute("name")?.Value;
+                    var number = field.Attribute("number")?.Value;
+                    if (string.IsNullOrWhiteSpace(name) || string.IsNullOrWhiteSpace(number))
+                    {
+                        continue;
+                    }
+
+                    if (!allowed.Contains(name))
+                    {
+                        continue;
+                    }
+
+                    options.Add(new FixFieldOption(name, number));
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to load FIX42 field definitions.");
+            }
+
+            return options
+                .OrderBy(option => option.Name, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+        }
+
+        private static string? ResolveFixDictionaryPath()
+        {
+            var baseDir = AppContext.BaseDirectory;
+            var directPath = Path.Combine(baseDir, "cfg", "FIX42.xml");
+            if (File.Exists(directPath))
+            {
+                return directPath;
+            }
+
+            var solutionRoot = FindAncestorWithFile(baseDir, "*.sln", maxLevels: 8);
+            if (string.IsNullOrWhiteSpace(solutionRoot))
+            {
+                return null;
+            }
+
+            var cfgPath = Path.Combine(solutionRoot, "cfg", "FIX42.xml");
+            return File.Exists(cfgPath) ? cfgPath : null;
         }
 
         private int GetSelectedFieldIndex()
@@ -620,6 +947,7 @@ namespace FixFlow.TradeAllocBridge.WPF.ViewModels
             OnPropertyChanged(nameof(MissingRequiredTagsMessage));
             NewFieldName = string.Empty;
             NewFieldTag = string.Empty;
+            NewFieldTagInput = string.Empty;
             OnPropertyChanged(nameof(CanSave));
             CommandManager.InvalidateRequerySuggested();
             OnPropertyChanged(nameof(ClientId));
@@ -1143,6 +1471,7 @@ namespace FixFlow.TradeAllocBridge.WPF.ViewModels
             FieldMappings.Add(new KeyValuePair<string, string>(NewFieldName.Trim(), NewFieldTag.Trim()));
             NewFieldName = string.Empty;
             NewFieldTag = string.Empty;
+            NewFieldTagInput = string.Empty;
             OnPropertyChanged(nameof(CanSave));
             OnPropertyChanged(nameof(MissingRequiredTagsMessage));
             MarkDirty();
@@ -1177,6 +1506,7 @@ namespace FixFlow.TradeAllocBridge.WPF.ViewModels
                 var updated = new KeyValuePair<string, string>(NewFieldName.Trim(), NewFieldTag.Trim());
                 FieldMappings[index] = updated;
                 SelectedFieldMapping = updated;
+                NewFieldTagInput = NewFieldTag;
                 StatusMessage = "✅ Field updated";
                 OnPropertyChanged(nameof(CanSave));
                 OnPropertyChanged(nameof(MissingRequiredTagsMessage));
@@ -1864,5 +2194,19 @@ namespace FixFlow.TradeAllocBridge.WPF.ViewModels
         public string ErrorMessage { get; set; } = string.Empty;
         public DateTime Timestamp { get; set; } = DateTime.Now;
     }
+
+    public class FixFieldOption
+    {
+        public FixFieldOption(string name, string tag)
+        {
+            Name = name;
+            Tag = tag;
+        }
+
+        public string Name { get; }
+        public string Tag { get; }
+        public string Display => $"{Name} ({Tag})";
+    }
 }
+
 
