@@ -5,7 +5,8 @@
         Title="FixFlow"
         Width="1000"
         Height="850"
-        WindowStartupLocation="CenterOwner"
+        SizeToContent="Manual"
+        WindowStartupLocation="CenterScreen"
         Icon="pack://application:,,,/Resources/FxF.ico"
         Background="#ffffff">
     <Grid>
@@ -38,6 +39,10 @@
             <!-- Message Log Tab -->
             <TabItem Header="&#x1F4CB; Message Log" Padding="15,10">
                 <local:MessageLogView/>
+            </TabItem>
+            <!-- FIX Dictionary Tab -->
+            <TabItem Header="&#x1F4D6; FIX Dictionary" Padding="15,10">
+                <local:FixDictionaryView/>
             </TabItem>
             <!-- Settings Tab -->
             <TabItem Header="&#x2699;&#xFE0F; Global Settings" Padding="15,10">
