@@ -8,8 +8,8 @@ public class FixConfig
 {
     // Core session identifiers (required)
     public string BeginString { get; set; } = "FIX.4.2";
-    public string SenderCompId { get; set; } = "RAJA"; // Tag 49
-    public string TargetCompId { get; set; } = "RJSYN"; // Tag 56
+    public string SenderCompId { get; set; } = "FIXFLOW"; // Tag 49
+    public string TargetCompId { get; set; } = "BROKER"; // Tag 56
 
     // Constant parameters
     public string AllocTransType { get; set; } = "0"; // Tage 71 - New

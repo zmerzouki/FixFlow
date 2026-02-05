@@ -58,11 +58,13 @@ namespace FixFlow.TradeAllocBridge.Core.Fix
                 var beginString = "FIX.4.2";
                 var sessionId = sessionID ?? new SessionID(beginString, senderCompID, targetCompID);
                 var session = Session.LookupSession(sessionId);
+                var noConnectionMessage =
+                    $"No connection could be established between {senderCompID} and {targetCompID}.";
 
                 if (session == null)
                 {
                     _logger.LogError("❌ No active FIX session found for {Sender}->{Target}.", senderCompID, targetCompID);
-                    return "NoSession";
+                    return noConnectionMessage;
                 }
 
                 // ✅ Sync session headers to message
@@ -93,6 +95,12 @@ namespace FixFlow.TradeAllocBridge.Core.Fix
 
                 _logger.LogDebug("🔍 Preparing to send FIX message using session {SessionID}", session.SessionID);
 
+                if (!session.IsLoggedOn)
+                {
+                    _logger.LogWarning("⚠️ FIX session not logged on for {Sender}->{Target}.", senderCompID, targetCompID);
+                    return noConnectionMessage;
+                }
+
                 bool ok = Session.SendToTarget(msg, session.SessionID);
                 _logger.LogInformation("📤 FIX message sent via session {Session}: {Status}",
                     session.SessionID, ok ? "OK" : "FAILED");
@@ -112,7 +120,7 @@ namespace FixFlow.TradeAllocBridge.Core.Fix
                     _logger.LogWarning(logEx, "⚠️ Failed to log serialized FIX message after send.");
                 }
 
-                return ok ? "OK" : "FAILED";
+                return ok ? "OK" : noConnectionMessage;
             }
             catch (Exception ex)
             {
@@ -124,18 +132,21 @@ namespace FixFlow.TradeAllocBridge.Core.Fix
         // -------------------------------------------------------------
         // Structural + Logical Validation (FIX 4.2)
         // -------------------------------------------------------------
-        private List<string> ValidateAllocation(Message msg)
+        public List<string> ValidateAllocation(Message msg)
         {
             var errors = new List<string>();
 
             if (_fix42Dictionary == null)
             {
-                _logger.LogWarning("⚠️ Skipping FIX42 structural validation (dictionary not loaded).");
+                const string message = "FIX42.xml dictionary is missing; structural validation cannot run.";
+                _logger.LogError("❌ {Message}", message);
+                errors.Add(message);
                 return errors;
             }
 
             try
             {
+                EnsureValidationHeaders(msg);
                 var msgType = msg.Header.GetString(QuickFix.Fields.Tags.MsgType);
                 _logger.LogDebug("🔍 Performing FIX42 structural validation for MsgType={MsgType}", msgType);
 
@@ -182,6 +193,35 @@ namespace FixFlow.TradeAllocBridge.Core.Fix
             if (!msg.IsSetField(78)) errors.Add("NoAllocs (78) missing or empty");
 
             return errors;
+        }
+
+        private static void EnsureValidationHeaders(Message msg)
+        {
+            if (!msg.Header.IsSetField(QuickFix.Fields.Tags.BeginString))
+            {
+                msg.Header.SetField(new QuickFix.Fields.BeginString("FIX.4.2"));
+            }
+
+            if (!msg.Header.IsSetField(QuickFix.Fields.Tags.BodyLength))
+            {
+                var serialized = msg.ToString();
+                msg.Header.SetField(new QuickFix.Fields.BodyLength(serialized.Length));
+            }
+
+            if (!msg.Header.IsSetField(QuickFix.Fields.Tags.MsgSeqNum))
+            {
+                msg.Header.SetField(new QuickFix.Fields.MsgSeqNum(1));
+            }
+
+            if (!msg.Header.IsSetField(QuickFix.Fields.Tags.SendingTime))
+            {
+                msg.Header.SetField(new QuickFix.Fields.SendingTime(DateTime.UtcNow));
+            }
+
+            if (!msg.Trailer.IsSetField(QuickFix.Fields.Tags.CheckSum))
+            {
+                msg.Trailer.SetField(new QuickFix.Fields.CheckSum("000"));
+            }
         }
 
         // -------------------------------------------------------------
