@@ -311,7 +311,10 @@
                                         </Grid>
                                     </StackPanel>
                                     <StackPanel Grid.Column="2" Orientation="Vertical" Margin="-70,0,0,0">
-                                        <TextBlock FontSize="10" Foreground="#555"><Run Text="Column Name"/></TextBlock>
+                                        <TextBlock FontSize="10"
+                                                   Foreground="#555"
+                                                   Text="Column Name or Position"
+                                                   ToolTip="Use a number (1, 2, 3...) to indicate column position for headless spreadsheets."/>
                                         <TextBox Text="{Binding NewFieldName, UpdateSourceTrigger=PropertyChanged}" Padding="9" FontSize="11" HorizontalAlignment="Left" MinWidth="200"/>
                                     </StackPanel>
                                 </Grid>

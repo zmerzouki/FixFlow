@@ -2,6 +2,7 @@
 using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
+using System.Text.RegularExpressions;
 using System.Xml.Linq;
 
 namespace FixFlow.TradeAllocBridge.Core.Fix;
@@ -13,6 +14,7 @@ namespace FixFlow.TradeAllocBridge.Core.Fix;
 public static class FixValueNormalizer
 {
     private static readonly Lazy<HashSet<int>> NumericTags = new(LoadNumericTags);
+    private static readonly Regex AllocAccountRegex = new(@"(?:^|\s)@([A-Za-z0-9][A-Za-z0-9._-]*)", RegexOptions.Compiled);
     /// <summary>
     /// Backwards-compatible normalization (no row context).
     /// </summary>
@@ -46,6 +48,7 @@ public static class FixValueNormalizer
             22 => string.IsNullOrEmpty(raw) ? "8" : raw.Trim(), // fallback to custom code if missing
             54 => NormalizeSide(raw),
             13 => NormalizeCommType(raw),
+            79 => NormalizeAllocAccount(raw),
             53 => NormalizeQuantity(raw),
             31 => NormalizePrice(raw),
             6 => NormalizePrice(raw),
@@ -140,6 +143,23 @@ public static class FixValueNormalizer
 
     private static string NormalizeSecID(string value) =>
         string.IsNullOrWhiteSpace(value) ? string.Empty : value.Trim();
+
+    private static string NormalizeAllocAccount(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return string.Empty;
+        }
+
+        var trimmed = value.Trim();
+        var match = AllocAccountRegex.Match(trimmed);
+        if (match.Success)
+        {
+            return match.Groups[1].Value;
+        }
+
+        return trimmed;
+    }
 
     private static string NormalizeSide(string value)
     {

@@ -543,7 +543,7 @@ namespace FixFlow.TradeAllocBridge.WPF.ViewModels
 
                 // Parse spreadsheet
                 StatusMessage = "Parsing spreadsheet...";
-                var trades = _excelParser.Parse(SelectedFilePath);
+                var trades = _excelParser.Parse(SelectedFilePath, mapping);
                 var totalTrades = trades.Count;
                 AllocationsSubmittedCount = totalTrades;
                 ProcessedTradesCount = totalTrades;

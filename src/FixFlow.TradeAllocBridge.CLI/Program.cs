@@ -323,7 +323,7 @@ namespace FixFlow.TradeAllocBridge.CLI
                     }
 
                     Console.WriteLine($"Processing file: {Path.GetFileName(attachmentPath)}");
-                    var trades = excelParser.Parse(attachmentPath);
+                    var trades = excelParser.Parse(attachmentPath, mapping);
                     var totalTrades = trades.Count;
                     // -------------------------------------------------------------------
                     // Group allocations by required fields (54,55,79,80,153)
