@@ -291,8 +291,9 @@ public class FixMessageBuilder
         var allocGroup = new Group(78, 79);
 
         string allocAcct = alloc.Fields.GetValueOrDefault(allocAcctCol, string.Empty);
-        if (!string.IsNullOrWhiteSpace(allocAcct))
-            allocGroup.SetField(new StringField(79, allocAcct.Trim()));
+        var normalizedAllocAcct = FixValueNormalizer.Normalize(79, allocAcct, alloc.Fields);
+        if (!string.IsNullOrWhiteSpace(normalizedAllocAcct))
+            allocGroup.SetField(new StringField(79, normalizedAllocAcct));
 
         string qtyVal = alloc.Fields.GetValueOrDefault(allocQtyCol, string.Empty);
         if (decimal.TryParse(qtyVal, NumberStyles.Any, CultureInfo.InvariantCulture, out var qty))

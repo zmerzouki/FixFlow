@@ -196,10 +196,11 @@
                                                 <TextBlock Grid.Column="0" FontWeight="SemiBold" Foreground="#333" Text="{Binding AllocId}"/>
                                                 <TextBlock Grid.Column="1" Foreground="#666" Margin="15,0,0,0"><Run Text="Side: "/><Run Text="{Binding Side, Converter={StaticResource SideDisplayConverter}}" FontWeight="SemiBold"/></TextBlock>
                                                 <TextBlock Grid.Column="2" Foreground="#666" Margin="15,0,0,0"><Run Text="Symbol: "/><Run Text="{Binding Symbol}" FontWeight="SemiBold"/></TextBlock>
-                                                <TextBlock Grid.Column="3" Foreground="#999" Margin="15,0,0,0"><Run Text="Merged Allocations: "/><Run Text="{Binding TradeCount}"/></TextBlock>
-                                                <TextBlock Grid.Column="4" HorizontalAlignment="Right" Foreground="#666" FontSize="11"><Run Text="{Binding Status}" FontWeight="SemiBold"/></TextBlock>
+                                                <TextBlock Grid.Column="3" Foreground="#666" Margin="15,0,0,0"><Run Text="Merged Allocations: "/><Run Text="{Binding TradeCount}" FontWeight="SemiBold"/></TextBlock>
+                                                <TextBlock Grid.Column="4" HorizontalAlignment="Left" Foreground="#666" FontSize="11" Margin="10,0,0,0"><Run Text="{Binding Status}" FontWeight="Bold"/></TextBlock>
                                             </Grid>
                                             <TextBlock TextWrapping="WrapWithOverflow" Foreground="#FF160101" FontSize="11" FontFamily="Courier New" Background="{x:Null}" FontWeight="Bold" Width="NaN" Margin="0,1,0,1"><Run Text="{Binding RawFix}"/></TextBlock>
+         
                                             <TextBlock Visibility="{Binding ErrorMessage, Converter={StaticResource StringToVisibilityConverter}}" 
                                                        Foreground="#d13438" FontSize="9" Text="{Binding ErrorMessage}"/>
                                         </StackPanel>

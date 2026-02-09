@@ -4,6 +4,7 @@ using NPOI.SS.UserModel;
 using NPOI.XSSF.UserModel;
 using NPOI.HSSF.UserModel;
 using System.Globalization;
+using FixFlow.TradeAllocBridge.Core.Config;
 
 namespace FixFlow.TradeAllocBridge.Core.Excel;
 
@@ -24,6 +25,11 @@ public class ExcelParser
 
     public List<TradeRecord> Parse(string filePath)
     {
+        return Parse(filePath, null);
+    }
+
+    public List<TradeRecord> Parse(string filePath, MappingConfig? mapping)
+    {
         var trades = new List<TradeRecord>();
 
         if (!File.Exists(filePath))
@@ -34,16 +40,18 @@ public class ExcelParser
 
         var extension = Path.GetExtension(filePath).ToLowerInvariant();
 
+        var useColumnPositions = ShouldUseColumnPositions(mapping);
+
         return extension switch
         {
-            ".csv" => ParseCsv(filePath),
-            ".xls" => ParseXls(filePath),
-            ".xlsx" or ".xlsm" or ".xltx" or ".xltm" => ParseXls(filePath), // use NPOI for both xls and xlsx to avoid ClosedXML dependency issues
+            ".csv" => ParseCsv(filePath, useColumnPositions),
+            ".xls" => ParseXls(filePath, useColumnPositions),
+            ".xlsx" or ".xlsm" or ".xltx" or ".xltm" => ParseXls(filePath, useColumnPositions), // use NPOI for both xls and xlsx to avoid ClosedXML dependency issues
             _ => throw new NotSupportedException($"Extension '{extension}' is not supported. Supported extensions are '.xlsx', '.xlsm', '.xltx', '.xltm', '.xls', and '.csv'.")
         };
     }
 
-    private List<TradeRecord> ParseCsv(string filePath)
+    private List<TradeRecord> ParseCsv(string filePath, bool useColumnPositions)
     {
         var trades = new List<TradeRecord>();
         var lines = File.ReadAllLines(filePath);
@@ -54,46 +62,63 @@ public class ExcelParser
             return trades;
         }
 
-        // Parse headers (detect header row)
         int headerRowIndex = -1;
         var headerColumns = new List<(int ColumnIndex, string Header)>();
-        int maxScan = Math.Min(lines.Length - 1, 50);
 
-        for (int rowIndex = 0; rowIndex <= maxScan; rowIndex++)
+        if (useColumnPositions)
         {
-            var values = ParseCsvLine(lines[rowIndex]);
-            var headers = new List<(int ColumnIndex, string Header)>();
-            for (int i = 0; i < values.Count; i++)
+            headerColumns = BuildPositionalHeaders(lines);
+            if (headerColumns.Count == 0)
             {
-                var header = values[i].Trim().Trim('"');
-                if (string.IsNullOrWhiteSpace(header)) continue;
-                if (!headers.Any(h => string.Equals(h.Header, header, StringComparison.OrdinalIgnoreCase)))
+                _logger?.LogWarning("No data columns found in headless CSV file {File}", filePath);
+                return trades;
+            }
+
+            _logger?.LogInformation("Parsing headless CSV file {File} using {Count} positional columns.",
+                Path.GetFileName(filePath), headerColumns.Count);
+        }
+        else
+        {
+            // Parse headers (detect header row)
+            int maxScan = Math.Min(lines.Length - 1, 50);
+
+            for (int rowIndex = 0; rowIndex <= maxScan; rowIndex++)
+            {
+                var values = ParseCsvLine(lines[rowIndex]);
+                var headers = new List<(int ColumnIndex, string Header)>();
+                for (int i = 0; i < values.Count; i++)
                 {
-                    headers.Add((i, header));
+                    var header = values[i].Trim().Trim('"');
+                    if (string.IsNullOrWhiteSpace(header)) continue;
+                    if (!headers.Any(h => string.Equals(h.Header, header, StringComparison.OrdinalIgnoreCase)))
+                    {
+                        headers.Add((i, header));
+                    }
+                }
+
+                if (headers.Count < 2) continue;
+
+                if (headers.Count > headerColumns.Count)
+                {
+                    headerColumns = headers;
+                    headerRowIndex = rowIndex;
                 }
             }
 
-            if (headers.Count < 2) continue;
-
-            if (headers.Count > headerColumns.Count)
+            if (headerRowIndex < 0 || headerColumns.Count == 0)
             {
-                headerColumns = headers;
-                headerRowIndex = rowIndex;
+                _logger?.LogWarning("No headers found in CSV file {File}", filePath);
+                return trades;
             }
-        }
 
-        if (headerRowIndex < 0 || headerColumns.Count == 0)
-        {
-            _logger?.LogWarning("No headers found in CSV file {File}", filePath);
-            return trades;
+            var headerNames = headerColumns.Select(h => h.Header).ToList();
+            _logger?.LogInformation("Parsing CSV file {File} with {Count} headers: {Headers}",
+                Path.GetFileName(filePath), headerNames.Count, string.Join(", ", headerNames));
         }
-
-        var headerNames = headerColumns.Select(h => h.Header).ToList();
-        _logger?.LogInformation("Parsing CSV file {File} with {Count} headers: {Headers}",
-            Path.GetFileName(filePath), headerNames.Count, string.Join(", ", headerNames));
 
         // Parse data rows
-        for (int rowIndex = headerRowIndex + 1; rowIndex < lines.Length; rowIndex++)
+        var startRowIndex = headerRowIndex + 1;
+        for (int rowIndex = startRowIndex; rowIndex < lines.Length; rowIndex++)
         {
             var line = lines[rowIndex];
             if (string.IsNullOrWhiteSpace(line))
@@ -171,7 +196,7 @@ public class ExcelParser
         return values;
     }
 
-    private List<TradeRecord> ParseXls(string filePath)
+    private List<TradeRecord> ParseXls(string filePath, bool useColumnPositions)
     {
         var trades = new List<TradeRecord>();
 
@@ -194,20 +219,40 @@ public class ExcelParser
             return trades;
         }
 
-        // Parse headers (detect header row)
-        var (headerRowIndex, headerColumns) = FindHeaderRow(sheet);
-        if (headerRowIndex < 0 || headerColumns.Count == 0)
+        int headerRowIndex;
+        List<(int ColumnIndex, string Header)> headerColumns;
+
+        if (useColumnPositions)
         {
-            _logger?.LogWarning("No header row found in Excel file {File}", filePath);
-            return trades;
+            headerRowIndex = -1;
+            headerColumns = BuildPositionalHeaders(sheet);
+            if (headerColumns.Count == 0)
+            {
+                _logger?.LogWarning("No data columns found in headless Excel file {File}", filePath);
+                return trades;
+            }
+
+            _logger?.LogInformation("Parsing headless Excel file {File} using {Count} positional columns.",
+                Path.GetFileName(filePath), headerColumns.Count);
+        }
+        else
+        {
+            // Parse headers (detect header row)
+            (headerRowIndex, headerColumns) = FindHeaderRow(sheet);
+            if (headerRowIndex < 0 || headerColumns.Count == 0)
+            {
+                _logger?.LogWarning("No header row found in Excel file {File}", filePath);
+                return trades;
+            }
+
+            var headers = headerColumns.Select(h => h.Header).ToList();
+            _logger?.LogInformation("Parsing Excel file {File} with {Count} headers: {Headers}",
+                Path.GetFileName(filePath), headers.Count, string.Join(", ", headers));
         }
 
-        var headers = headerColumns.Select(h => h.Header).ToList();
-        _logger?.LogInformation("Parsing Excel file {File} with {Count} headers: {Headers}",
-            Path.GetFileName(filePath), headers.Count, string.Join(", ", headers));
-
         // Parse data rows
-        for (int rowIndex = headerRowIndex + 1; rowIndex <= sheet.LastRowNum; rowIndex++)
+        var startRowIndex = headerRowIndex + 1;
+        for (int rowIndex = startRowIndex; rowIndex <= sheet.LastRowNum; rowIndex++)
         {
             var row = sheet.GetRow(rowIndex);
             if (row == null)
@@ -332,6 +377,158 @@ public class ExcelParser
         }
 
         return (bestRow, bestHeaders);
+    }
+
+    private static bool ShouldUseColumnPositions(MappingConfig? mapping)
+    {
+        if (mapping?.TradeAllocations == null || mapping.TradeAllocations.Count == 0)
+        {
+            return false;
+        }
+
+        return mapping.TradeAllocations.Keys.Any(key =>
+            int.TryParse(key, NumberStyles.Integer, CultureInfo.InvariantCulture, out var index) && index > 0);
+    }
+
+    private static List<(int ColumnIndex, string Header)> BuildPositionalHeaders(string[] lines)
+    {
+        var maxColumns = 0;
+        foreach (var line in lines)
+        {
+            if (string.IsNullOrWhiteSpace(line)) continue;
+            var values = ParseCsvLineStatic(line);
+            if (values.Count > maxColumns)
+            {
+                maxColumns = values.Count;
+            }
+        }
+
+        if (maxColumns <= 0)
+        {
+            return new List<(int, string)>();
+        }
+
+        var headers = new List<(int ColumnIndex, string Header)>(maxColumns);
+        for (int i = 0; i < maxColumns; i++)
+        {
+            headers.Add((i, (i + 1).ToString(CultureInfo.InvariantCulture)));
+        }
+
+        return headers;
+    }
+
+    private static List<(int ColumnIndex, string Header)> BuildPositionalHeaders(ISheet sheet)
+    {
+        var maxColumns = 0;
+        for (int rowIndex = 0; rowIndex <= sheet.LastRowNum; rowIndex++)
+        {
+            var row = sheet.GetRow(rowIndex);
+            if (row == null || row.LastCellNum <= 0) continue;
+
+            var lastNonEmpty = -1;
+            for (int i = 0; i < row.LastCellNum; i++)
+            {
+                var cell = row.GetCell(i);
+                if (cell == null) continue;
+                var value = GetCellValueStatic(cell).Trim();
+                if (!string.IsNullOrWhiteSpace(value))
+                {
+                    lastNonEmpty = i;
+                }
+            }
+
+            if (lastNonEmpty >= 0)
+            {
+                maxColumns = Math.Max(maxColumns, lastNonEmpty + 1);
+            }
+        }
+
+        if (maxColumns <= 0)
+        {
+            return new List<(int, string)>();
+        }
+
+        var headers = new List<(int ColumnIndex, string Header)>(maxColumns);
+        for (int i = 0; i < maxColumns; i++)
+        {
+            headers.Add((i, (i + 1).ToString(CultureInfo.InvariantCulture)));
+        }
+
+        return headers;
+    }
+
+    private static List<string> ParseCsvLineStatic(string line)
+    {
+        var values = new List<string>();
+        var currentValue = new System.Text.StringBuilder();
+        bool inQuotes = false;
+
+        for (int i = 0; i < line.Length; i++)
+        {
+            char c = line[i];
+
+            if (c == '"')
+            {
+                if (inQuotes && i + 1 < line.Length && line[i + 1] == '"')
+                {
+                    currentValue.Append('"');
+                    i++;
+                }
+                else
+                {
+                    inQuotes = !inQuotes;
+                }
+            }
+            else if (c == ',' && !inQuotes)
+            {
+                values.Add(currentValue.ToString());
+                currentValue.Clear();
+            }
+            else
+            {
+                currentValue.Append(c);
+            }
+        }
+
+        values.Add(currentValue.ToString());
+        return values;
+    }
+
+    private static string GetCellValueStatic(ICell cell)
+    {
+        if (cell == null)
+            return string.Empty;
+
+        if (cell.CellType == CellType.Formula)
+        {
+            if (cell.CachedFormulaResultType == CellType.Numeric && DateUtil.IsCellDateFormatted(cell))
+            {
+                var dateValue = cell.DateCellValue;
+                return dateValue?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) ?? string.Empty;
+            }
+
+            return cell.CachedFormulaResultType switch
+            {
+                CellType.String => cell.StringCellValue ?? string.Empty,
+                CellType.Numeric => cell.NumericCellValue.ToString(CultureInfo.InvariantCulture),
+                CellType.Boolean => cell.BooleanCellValue.ToString(),
+                _ => string.Empty
+            };
+        }
+
+        if (cell.CellType == CellType.Numeric && DateUtil.IsCellDateFormatted(cell))
+        {
+            var dateValue = cell.DateCellValue;
+            return dateValue?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) ?? string.Empty;
+        }
+
+        return cell.CellType switch
+        {
+            CellType.String => cell.StringCellValue ?? string.Empty,
+            CellType.Numeric => cell.NumericCellValue.ToString(CultureInfo.InvariantCulture),
+            CellType.Boolean => cell.BooleanCellValue.ToString(),
+            _ => string.Empty
+        };
     }
 
     // ClosedXML parser removed in favor of NPOI-based path to avoid font-related dependency issues.
