@@ -4,7 +4,7 @@
 FixFlow addresses a common gap between trading desks and middle-office operations: incoming order and allocation messages are often inconsistent, incomplete, or mapped differently across parties, OMS/EMS, and Trade Allocation and Confirmation systems. That mismatch creates manual remediation, delayed allocations, and operational risk. The project provides a reliable bridge that normalizes, validates, and transforms trade allocations into a consistent, auditable flow that downstream systems can ingest without custom per-counterparty logic.
 
 ## What's Innovative About the Approach
-Instead of hard-coding one-off mappings, FixFlow treats FIX transformation as a first-class, configurable workflow.
+Instead of hard-coding one-off parsers, FixFlow treats FIX transformation as a first-class, configurable workflow engine.
 
 - It uses dictionary-driven parsing so validation and tag semantics stay aligned with FIX standards.
 - It supports mapping rules and tag inference that can be tuned without rebuilding the app, making it practical to onboard new counterparties quickly.
