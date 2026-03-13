@@ -4,12 +4,7 @@
 FixFlow addresses a common gap between institutional trading desks and middle-office operations: incoming trade allocation instructions are received in spreadsheets, often inconsistent, incomplete, or mapped differently across parties, Order Management Systems, and middle-office systems that handle trade allocations and confirmation. That mismatch creates manual remediation, delayed allocation processing, and increased operational risk. The project provides a configurable parser that normalizes, validates, and transforms trade allocations into a consistent, auditable flow that generates FIX-compliant messages that downstream systems can ingest without custom per-counterparty logic.
 
 ## What's Innovative About the Approach
-<<<<<<< HEAD
-Instead of hard-coding one-off parsers, FixFlow treats FIX transformation as a first-class, configurable workflow engine.
-=======
-Instead of hard-coding one-off parsers, FixFlow treats FIX transformation as a first-class, configurable workflow.
->>>>>>> origin/recover-mar12-restored
-
+    Instead of hard-coding one-off parsers, FixFlow treats FIX transformation as a first-class, configurable workflow engine.
 - It uses dictionary-driven parsing so validation and tag semantics stay aligned with FIX standards.
 - It supports mapping rules and tag inference that can be tuned without rebuilding the app, making it practical to onboard new counterparties quickly.
 - It emphasizes traceability, surfacing message history and validation results so Ops can explain exactly why a message was accepted, corrected, or rejected.
@@ -38,3 +33,6 @@ Outputs are emitted for downstream systems and accompanied by logs/diagnostics f
 - Automating fixes for missing or inconsistent FIX tags.
 - Building an auditable pipeline for trade and allocation ingestion.
 - Reducing manual Ops intervention in post-trade workflows.
+
+## License
+This repository is licensed under the GNU Affero General Public License v3.0 or later (`AGPL-3.0-or-later`). See `LICENSE`.
