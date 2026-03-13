@@ -63,6 +63,10 @@ public class FixConfig
     public string? SslCaFile { get; set; }
     public bool SslVerifyPeer { get; set; } = true;
 
-    // Utility
-    public string SessionQualifier => $"{SenderCompId}-{TargetCompId}-{BeginString}";
+    // Utility / session discriminator (optional)
+    // If set, this will be mapped to SenderSubID (tag 50) for session routing.
+    public string? SessionQualifier { get; set; }
+
+    public string? NormalizedSessionQualifier =>
+        string.IsNullOrWhiteSpace(SessionQualifier) ? null : SessionQualifier.Trim();
 }

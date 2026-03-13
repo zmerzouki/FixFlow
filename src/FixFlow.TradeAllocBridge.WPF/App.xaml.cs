@@ -46,10 +46,15 @@ namespace FixFlow.TradeAllocBridge.WPF
 
         private void ConfigureServices(ServiceCollection services)
         {
-            var configuration = new ConfigurationBuilder()
+            var configurationBuilder = new ConfigurationBuilder()
                 .SetBasePath(AppContext.BaseDirectory)
-                .AddJsonFile("appsettings.json", optional: true, reloadOnChange: true)
-                .Build();
+                .AddJsonFile("appsettings.json", optional: true, reloadOnChange: true);
+            var sharedSettingsPath = SharedConfigResolver.ResolveSharedAppSettingsPath(AppContext.BaseDirectory);
+            if (!string.IsNullOrWhiteSpace(sharedSettingsPath))
+            {
+                configurationBuilder.AddJsonFile(sharedSettingsPath, optional: true, reloadOnChange: true);
+            }
+            var configuration = configurationBuilder.Build();
 
             var appConfig = configuration.Get<AppConfig>() ?? new AppConfig(); // This now works
             LogService.Configure(appConfig.Logging);

@@ -75,7 +75,16 @@
                     <Button Content="&#x2795; New" Command="{Binding NewMappingCommand}" Style="{StaticResource PrimaryButton}" Background="#005a9e" Height="32" FontSize="12" FontWeight="SemiBold" Margin="0,0,0,8"/>
                     <Button Content="&#x270F;&#xFE0F; Edit" Command="{Binding EditMappingCommand}" Style="{StaticResource PrimaryButton}" Background="#FF21B1C9" Height="32" FontSize="12" FontWeight="SemiBold" Margin="0,0,0,8"/>
                     <Button Content="&#x2705; Validate" Command="{Binding ValidateMappingCommand}" Style="{StaticResource PrimaryButton}" Background="#FF2BB61B" Height="32" FontSize="12" FontWeight="SemiBold" Margin="0,0,0,8"/>
-                    <Button Content="&#x1F4E8; Automate" Command="{Binding DeployMappingCommand}" Style="{StaticResource PrimaryButton}" Background="#FF699170" Height="32" FontSize="12" FontWeight="SemiBold" Margin="0,0,0,8"/>
+                    <Button Content="&#x1F4E8; Automate"
+                            Command="{Binding DeployMappingCommand}"
+                            ToolTip="{Binding DeployTooltip}"
+                            ToolTipService.ShowOnDisabled="True"
+                            Style="{StaticResource PrimaryButton}"
+                            Background="#FF699170"
+                            Height="32"
+                            FontSize="12"
+                            FontWeight="SemiBold"
+                            Margin="0,0,0,8"/>
                     <Button Content="&#x1F5D1;&#xFE0F; Delete" Command="{Binding DeleteMappingCommand}" Style="{StaticResource PrimaryButton}" Background="#FFEB4634" Height="32" FontSize="12" FontWeight="SemiBold" Margin="0,0,0,8"/>
                 </StackPanel>
             </StackPanel>
@@ -110,6 +119,7 @@
                                 <RowDefinition Height="Auto"/>
                                 <RowDefinition Height="Auto"/>
                                 <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
                             </Grid.RowDefinitions>
 
                             <TextBlock Grid.Row="0" Grid.Column="0" Text="Organization ID:" VerticalAlignment="Center" FontSize="11"/>
@@ -117,9 +127,17 @@
 
                             <TextBlock Grid.Row="1" Grid.Column="0" Text="Sender Domain:" VerticalAlignment="Center" FontSize="11"/>
                             <TextBox Grid.Row="1" Grid.Column="1" Text="{Binding SenderDomain, UpdateSourceTrigger=PropertyChanged}" VerticalAlignment="Center" Padding="8" FontSize="11" Margin="10,8,0,0"/>
+                            <TextBlock Grid.Row="2"
+                                       Grid.Column="1"
+                                       Text="{Binding SenderDomainWarning}"
+                                       FontSize="10"
+                                       Foreground="#b45309"
+                                       Margin="10,2,0,0"
+                                       TextWrapping="Wrap"
+                                       Visibility="{Binding SenderDomainWarning, Converter={StaticResource StringToVisibilityConverter}}"/>
                             <!-- OnBehalfOfCompID (Tag 115) -->
-                            <TextBlock Grid.Row="2" Grid.Column="0" Text="OnBehalfOfCompID (Tag 115):" VerticalAlignment="Center" FontSize="11"/>
-                            <TextBox Grid.Row="2" Grid.Column="1" Margin="10,8,0,0" Text="{Binding OnBehalfOfCompId, UpdateSourceTrigger=PropertyChanged}" VerticalAlignment="Center" Padding="8" FontSize="11"/>
+                            <TextBlock Grid.Row="3" Grid.Column="0" Text="FIX ID (Tag 115):" VerticalAlignment="Center" FontSize="11"/>
+                            <TextBox Grid.Row="3" Grid.Column="1" Margin="10,8,0,0" Text="{Binding OnBehalfOfCompId, UpdateSourceTrigger=PropertyChanged}" VerticalAlignment="Center" Padding="8" FontSize="11"/>
 
                         </Grid>
                     </StackPanel>
@@ -172,7 +190,11 @@
                                     </DataTemplate>
                                 </ListBox.ItemTemplate>
                             </ListBox>
-                            <StackPanel Grid.Column="1" Orientation="Vertical" Margin="8,0,0,0" VerticalAlignment="Center">
+                            <StackPanel Grid.Column="1"
+                                        Orientation="Vertical"
+                                        Margin="8,0,0,0"
+                                        VerticalAlignment="Center"
+                                        Visibility="{Binding IsEditing, Converter={StaticResource BoolToVisibilityConverter}}">
                                 <Button Command="{Binding MoveFieldUpCommand}"
                                         Style="{StaticResource PrimaryButton}"
                                         Height="26"
@@ -318,6 +340,37 @@
                                         <TextBox Text="{Binding NewFieldName, UpdateSourceTrigger=PropertyChanged}" Padding="9" FontSize="11" HorizontalAlignment="Left" MinWidth="200"/>
                                     </StackPanel>
                                 </Grid>
+                                <Border Margin="0,10,0,0"
+                                        Padding="8"
+                                        Background="#fff8eb"
+                                        BorderBrush="#f0c36d"
+                                        BorderThickness="1"
+                                        CornerRadius="4"
+                                        Visibility="{Binding DependencyWarningMessage, Converter={StaticResource StringToVisibilityConverter}}">
+                                    <StackPanel>
+                                        <TextBlock FontSize="10"
+                                                   Foreground="#7a4b00"
+                                                   TextWrapping="Wrap"
+                                                   Text="{Binding DependencyWarningMessage}"/>
+                                        <ItemsControl ItemsSource="{Binding DependencyDefaults}" Margin="0,6,0,0">
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate>
+                                                    <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
+                                                        <TextBlock Width="200"
+                                                                   FontSize="10"
+                                                                   Foreground="#555"
+                                                                   Text="{Binding Display}"/>
+                                                        <TextBox Text="{Binding DefaultValue, UpdateSourceTrigger=PropertyChanged}"
+                                                                 MinWidth="160"
+                                                                 Padding="6"
+                                                                 FontSize="10"
+                                                                 Margin="8,0,0,0"/>
+                                                    </StackPanel>
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
+                                    </StackPanel>
+                                </Border>
                             </StackPanel>
                         </Border>
                     </StackPanel>
@@ -371,6 +424,10 @@
                     <TextBlock FontSize="12" Foreground="#666" FontWeight="SemiBold">
                         <Run Text="Date Created: "/>
                         <Run Text="{Binding DateCreated}"/>
+                    </TextBlock>
+                    <TextBlock FontSize="12" Foreground="#666" FontWeight="SemiBold">
+                        <Run Text="Date Validated: "/>
+                        <Run Text="{Binding DateValidated}"/>
                     </TextBlock>
                     <TextBlock FontSize="12" Foreground="#666" FontWeight="SemiBold">
                         <Run Text="Date Modified: "/>

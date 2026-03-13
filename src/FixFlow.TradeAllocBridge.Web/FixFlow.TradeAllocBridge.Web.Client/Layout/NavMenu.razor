@@ -1,0 +1,142 @@
+@inject HttpClient Http
+@inject IJSRuntime JS
+
+@code {
+    private string? _environmentName;
+    private bool _isDarkMode;
+
+    [Parameter]
+    public bool IsCollapsed { get; set; }
+
+    [Parameter]
+    public EventCallback OnToggle { get; set; }
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            _environmentName = await Http.GetStringAsync("api/environment");
+        }
+        catch
+        {
+            _environmentName = "Unavailable";
+        }
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender)
+        {
+            return;
+        }
+
+        try
+        {
+            _isDarkMode = await JS.InvokeAsync<bool>("fixflowTheme.get");
+            StateHasChanged();
+        }
+        catch
+        {
+            // Ignore JS errors.
+        }
+    }
+
+    private async Task ToggleAsync()
+    {
+        if (OnToggle.HasDelegate)
+        {
+            await OnToggle.InvokeAsync();
+        }
+    }
+
+    private async Task ToggleThemeAsync()
+    {
+        try
+        {
+            _isDarkMode = await JS.InvokeAsync<bool>("fixflowTheme.toggle");
+            StateHasChanged();
+        }
+        catch
+        {
+            // Ignore JS errors.
+        }
+    }
+}
+
+<div class="nav-shell">
+    <div class="top-row ps-3 navbar navbar-dark">
+        <div class="container-fluid">
+            <div class="nav-title-row">
+                <a class="navbar-brand" href="">
+                    <img class="nav-logo" src="images/fixflow-title.png" alt="FixFlow" />
+                </a>
+            </div>
+        </div>
+    </div>
+
+   <input type="checkbox" title="Navigation menu" class="navbar-toggler" />
+
+    <div class="nav-scrollable" onclick="document.querySelector('.navbar-toggler').click()">
+        <nav class="flex-column">
+            <div class="nav-item px-3">
+                <NavLink class="nav-link" href="" Match="NavLinkMatch.All">
+                    <span class="bi bi-house-door-fill-nav-menu" aria-hidden="true"></span>Home
+                </NavLink>
+            </div>
+
+            <div class="nav-item px-3">
+                <NavLink class="nav-link" href="direct-ingestion">
+                    <span class="bi bi-diagram-3-fill-nav-menu" aria-hidden="true"></span>Direct Ingestion
+                </NavLink>
+            </div>
+            
+            <div class="nav-item px-3">
+                <NavLink class="nav-link" href="map-management">
+                    <span class="bi bi-list-nested-nav-menu" aria-hidden="true"></span>Map Management
+                </NavLink>
+            </div>
+
+            <div class="nav-item px-3">
+                <NavLink class="nav-link" href="message-log">
+                    <span class="bi bi-journal-text-nav-menu" aria-hidden="true"></span>Message Log
+                </NavLink>
+            </div>
+
+            <div class="nav-item px-3">
+                <NavLink class="nav-link" href="fix-dictionary">
+                    <span class="bi bi-book-half-nav-menu" aria-hidden="true"></span>FIX Dictionary
+                </NavLink>
+            </div>
+
+            <div class="nav-item px-3">
+                <NavLink class="nav-link" href="samples">
+                    <span class="bi bi-collection-nav-menu" aria-hidden="true"></span>Samples
+                </NavLink>
+            </div>
+
+            <div class="nav-item px-3">
+                <NavLink class="nav-link" href="settings">
+                    <span class="bi bi-gear-fill-nav-menu" aria-hidden="true"></span>Global Settings
+                </NavLink>
+            </div>
+        </nav>
+    </div>
+
+    <div class="nav-footer">
+        <div class="nav-footer-label">Environment</div>
+        <div class="nav-footer-value">@(_environmentName ?? "Loading...")</div>
+        <button class="theme-toggle" type="button" @onclick="ToggleThemeAsync" aria-pressed="@_isDarkMode">
+            <span class="theme-toggle-label">Dark mode</span>
+            <span class="theme-toggle-pill @(_isDarkMode ? "is-on" : string.Empty)">
+                <span class="theme-toggle-knob"></span>
+            </span>
+        </button>
+    </div>
+
+    @if (!IsCollapsed)
+    {
+        <button class="nav-pin-float" type="button" title="Hide menu" aria-label="Hide menu" @onclick="ToggleAsync">
+            <span class="nav-pin-icon">&lt;&lt;</span>
+        </button>
+    }
+</div>

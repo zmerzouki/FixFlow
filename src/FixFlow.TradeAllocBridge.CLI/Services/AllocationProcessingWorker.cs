@@ -42,7 +42,7 @@ namespace FixFlow.TradeAllocBridge.CLI.Services
         {
             try
             {
-                await Program.ProcessOnceAsync(_services, _dryRun, stoppingToken);
+                await Program.ProcessOnceAsync(_services, _dryRun, keepEngineRunning: true, stoppingToken);
             }
             catch (OperationCanceledException)
             {

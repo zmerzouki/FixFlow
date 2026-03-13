@@ -19,6 +19,12 @@ namespace FixFlow.TradeAllocBridge.Core.Config
         public string? ClientId { get; set; }
 
         /// <summary>
+        /// Friendly organization name for the mapping (e.g., "Contoso Asset Management").
+        /// </summary>
+        [JsonPropertyName("organizationName")]
+        public string? OrganizationName { get; set; }
+
+        /// <summary>
         /// Optional sender domain match (e.g., "rjf.local").
         /// Used by GraphEmailService to auto-resolve client maps.
         /// </summary>
@@ -39,10 +45,30 @@ namespace FixFlow.TradeAllocBridge.Core.Config
         public Dictionary<string, string> TradeAllocations { get; set; } = new(StringComparer.OrdinalIgnoreCase);
 
         /// <summary>
+        /// Default FIX tag values (tag number → value) when not supplied by the spreadsheet.
+        /// </summary>
+        [JsonPropertyName("defaultTagValues")]
+        public Dictionary<string, string> DefaultTagValues { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>
+        /// Per-field default tag values (column name → (tag number → value)).
+        /// Used when the same tag is mapped multiple times (e.g., repeating groups).
+        /// </summary>
+        [JsonPropertyName("fieldDefaultTagValues")]
+        public Dictionary<string, Dictionary<string, string>> FieldDefaultTagValues { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>
         /// Optional predefined FIX header fields for this client (SenderCompID, TargetCompID, etc.).
         /// </summary>
         [JsonPropertyName("predefined")]
         public PredefinedFields? Predefined { get; set; }
+
+        /// <summary>
+        /// Date/time of the most recent successful dry-run validation.
+        /// </summary>
+        [JsonPropertyName("dateValidated")]
+        public string? DateValidated { get; set; }
+
 
         // Cache the JsonSerializerOptions instance
         private static readonly JsonSerializerOptions CachedJsonOptions = new()
@@ -69,7 +95,44 @@ namespace FixFlow.TradeAllocBridge.Core.Config
                 config.Delimiter = ";";
 
             config.TradeAllocations ??= new(StringComparer.OrdinalIgnoreCase);
+            config.DefaultTagValues ??= new(StringComparer.OrdinalIgnoreCase);
+            config.FieldDefaultTagValues ??= new(StringComparer.OrdinalIgnoreCase);
 
+            if (config.FieldDefaultTagValues.Count > 0)
+            {
+                var normalized = new Dictionary<string, Dictionary<string, string>>(StringComparer.OrdinalIgnoreCase);
+                foreach (var columnEntry in config.FieldDefaultTagValues)
+                {
+                    var column = columnEntry.Key?.Trim();
+                    if (string.IsNullOrWhiteSpace(column))
+                    {
+                        continue;
+                    }
+
+                    var tagDefaults = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                    if (columnEntry.Value != null)
+                    {
+                        foreach (var tagEntry in columnEntry.Value)
+                        {
+                            var tag = tagEntry.Key?.Trim();
+                            var value = tagEntry.Value?.Trim() ?? string.Empty;
+                            if (string.IsNullOrWhiteSpace(tag) || string.IsNullOrWhiteSpace(value))
+                            {
+                                continue;
+                            }
+
+                            tagDefaults[tag] = value;
+                        }
+                    }
+
+                    if (tagDefaults.Count > 0)
+                    {
+                        normalized[column] = tagDefaults;
+                    }
+                }
+
+                config.FieldDefaultTagValues = normalized;
+            }
             return config;
         }
     }
@@ -81,6 +144,9 @@ namespace FixFlow.TradeAllocBridge.Core.Config
     {
         [JsonPropertyName("49")]
         public string? SenderCompID { get; set; }
+
+        [JsonPropertyName("50")]
+        public string? SenderSubID { get; set; }
 
         [JsonPropertyName("56")]
         public string? TargetCompID { get; set; }

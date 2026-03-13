@@ -21,6 +21,7 @@ namespace FixFlow.TradeAllocBridge.WPF.Views
                 if (IsVisible && DataContext is SettingsViewModel vm)
                 {
                     vm.LoadSettings();
+                    vm.LoadFixDefaults();
                 }
             };
         }

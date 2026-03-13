@@ -1,0 +1,134 @@
+@page "/samples"
+@inject HttpClient Http
+@inject NavigationManager Nav
+
+<PageTitle>Samples</PageTitle>
+
+<section class="page-header">
+    <div>
+        <h1>Samples</h1>
+        <p>Select a sample allocation spreadsheet and test Direct Ingestion using a map with the same name.</p>
+        @if (!_isLoading && !_loadFailed)
+        {
+            <p class="muted">Samples found: @_samples.Count</p>
+        }
+    </div>
+</section>
+
+<section class="card">
+    @if (_isLoading)
+    {
+        <div class="empty-state">Loading samples...</div>
+    }
+    else if (_loadFailed)
+    {
+        <div class="empty-state">Failed to load samples.</div>
+    }
+    else if (_samples.Count == 0)
+    {
+        <div class="empty-state">No samples found in <code>samples</code> folder.</div>
+    }
+    else
+    {
+        <div class="table">
+            <div class="table-header">
+                <span></span>
+                <span>Sample File</span>
+                <span>Size</span>
+                <span></span>
+            </div>
+            @foreach (var sample in _samples)
+            {
+                <div class="table-row">
+                    <span>
+                        <input type="radio"
+                               name="sampleSelection"
+                               value="@sample.FileName"
+                               checked="@string.Equals(sample.FileName, _selectedSample, StringComparison.OrdinalIgnoreCase)"
+                               @onchange="() => SelectSample(sample.FileName)" />
+                    </span>
+                    <span>@sample.FileName</span>
+                    <span>@($"{sample.SizeKb} KB")</span>
+                    <span>
+                        <a class="btn small"
+                           href="@GetPreviewUrl(sample.FileName)"
+                           target="_blank"
+                           rel="noopener">
+                            Preview
+                        </a>
+                    </span>
+                </div>
+            }
+        </div>
+    }
+
+    <div class="button-row">
+        <button class="btn primary"
+                disabled="@string.IsNullOrWhiteSpace(_selectedSample)"
+                @onclick="TestDirectIngestion">
+            Test Direct Ingestion
+        </button>
+        <button class="btn"
+                disabled="@_isLoading"
+                @onclick="LoadSamplesAsync">
+            Refresh
+        </button>
+    </div>
+</section>
+
+@code {
+    private bool _isLoading = true;
+    private bool _loadFailed;
+    private readonly List<SampleFileOption> _samples = new();
+    private string? _selectedSample;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadSamplesAsync();
+    }
+
+    private async Task LoadSamplesAsync()
+    {
+        _isLoading = true;
+        _loadFailed = false;
+        _samples.Clear();
+
+        try
+        {
+            var response = await Http.GetFromJsonAsync<List<SampleFileOption>>("api/samples");
+            if (response is not null)
+            {
+                _samples.AddRange(response);
+            }
+        }
+        catch
+        {
+            _loadFailed = true;
+        }
+        finally
+        {
+            _isLoading = false;
+        }
+    }
+
+    private void SelectSample(string fileName)
+    {
+        _selectedSample = fileName;
+    }
+
+    private void TestDirectIngestion()
+    {
+        if (string.IsNullOrWhiteSpace(_selectedSample))
+        {
+            return;
+        }
+
+        var url = $"/direct-ingestion?sample={Uri.EscapeDataString(_selectedSample)}";
+        Nav.NavigateTo(url);
+    }
+
+    private static string GetPreviewUrl(string fileName)
+    {
+        return $"/samples/preview?file={Uri.EscapeDataString(fileName)}";
+    }
+}

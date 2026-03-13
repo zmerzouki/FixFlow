@@ -17,8 +17,10 @@ namespace FixFlow.TradeAllocBridge.Core.Fix
         private readonly string _configFile;
         private readonly string _dictPath;
         private SessionSettings? _sessionSettings;      
+        private bool _isStarted;
 
         public SessionSettings? SessionSettings => _sessionSettings;
+        public bool IsStarted => _isStarted;
 
         public FixEngine(FixApp app, FixConfig config, ILogger<FixEngine> logger)
         {
@@ -74,18 +76,29 @@ namespace FixFlow.TradeAllocBridge.Core.Fix
         // --------------------------------------------------------------
         // Append new sessions instead of overwriting the file
         // --------------------------------------------------------------
-        public void AppendSessionsIfMissing(IEnumerable<(string Sender, string Target)> sessions)
+        public void AppendSessionsIfMissing(IEnumerable<(string Sender, string Target, string? SenderSubId, string? TargetSubId)> sessions)
         {
             if (!File.Exists(_configFile))
                 WriteDefaultFixConfig();
 
-            var existing = File.ReadAllText(_configFile);
             var sb = new StringBuilder();
-
-            foreach (var (Sender, Target) in sessions)
+            SessionSettings existingSettings;
+            try
             {
-                string marker = $"SenderCompID={Sender}";
-                if (existing.Contains(marker))
+                existingSettings = new SessionSettings(_configFile);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to load existing FIX settings; will append sessions anyway.");
+                existingSettings = new SessionSettings();
+            }
+
+            foreach (var (Sender, Target, SenderSubId, TargetSubId) in sessions)
+            {
+                var senderSubId = string.IsNullOrWhiteSpace(SenderSubId) ? SessionID.NOT_SET : SenderSubId;
+                var targetSubId = string.IsNullOrWhiteSpace(TargetSubId) ? SessionID.NOT_SET : TargetSubId;
+                var sessionId = new SessionID("FIX.4.2", Sender, senderSubId, Target, targetSubId);
+                if (existingSettings.Has(sessionId))
                 {
                     _logger.LogInformation("ℹ️ Session {Sender}->{Target} already exists, skipping append.", Sender, Target);
                     continue;
@@ -98,6 +111,14 @@ namespace FixFlow.TradeAllocBridge.Core.Fix
                 sb.AppendLine("FileStorePath=store");
                 sb.AppendLine($"SenderCompID={Sender}");
                 sb.AppendLine($"TargetCompID={Target}");
+                if (!string.IsNullOrWhiteSpace(SenderSubId))
+                {
+                    sb.AppendLine($"SenderSubID={SenderSubId}");
+                }
+                if (!string.IsNullOrWhiteSpace(TargetSubId))
+                {
+                    sb.AppendLine($"TargetSubID={TargetSubId}");
+                }
                 sb.AppendLine();
             }
 
@@ -149,7 +170,14 @@ namespace FixFlow.TradeAllocBridge.Core.Fix
                 _logger.LogError(ex, "❌ Failed to load FIX42.xml dictionary.");
             }
 
+            if (_isStarted)
+            {
+                _logger.LogInformation("ℹ️ FIX engine already started.");
+                return;
+            }
+
             _initiator.Start();
+            _isStarted = true;
 
             foreach (SessionID sessionId in _initiator.GetSessionIDs())
             {
@@ -181,6 +209,7 @@ namespace FixFlow.TradeAllocBridge.Core.Fix
             try
             {
                 _initiator?.Stop();
+                _isStarted = false;
                 _logger.LogInformation("🛑 FIX engine stopped cleanly.");
             }
             catch (Exception ex)

@@ -1,0 +1,21 @@
+{
+  "clientId": "DEFAULT",
+  "senderDomain": "",
+  "delimiter": ";",
+  "tradeAllocations": {
+    "Side": "54",
+    "Symbol": "55",
+    "Trade Date": "75",
+    "Custodian Name": "79",
+    "Quantity": "80",
+    "Average Price": "153"
+  },
+  "predefined": {
+    "49": "FIXFLOW",
+    "56": "BROKER",
+    "57": "BROKER_SUB",
+    "115": null,
+    "128": "BROKER_ALLOC",
+    "1": null
+  }
+}

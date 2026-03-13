@@ -2,6 +2,7 @@
 using System.Collections.Generic;
 using System.IO;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace FixFlow.TradeAllocBridge.Core.Mapping
 {
@@ -28,6 +29,11 @@ namespace FixFlow.TradeAllocBridge.Core.Mapping
         /// <summary>Mapping of spreadsheet column names to FIX tags (e.g. "Trade Date" → "75").</summary>
         public Dictionary<string, string> FieldMap { get; set; } = new();
 
+        /// <summary>Date/time of most recent successful dry-run validation.</summary>
+        [JsonPropertyName("dateValidated")]
+        public string? DateValidated { get; set; }
+
+
         /// <summary>Load a FixMapping from a JSON file.</summary>
         public static FixMapping Load(string path)
         {
@@ -45,7 +51,6 @@ namespace FixFlow.TradeAllocBridge.Core.Mapping
 
             if (mapping.FieldMap == null || mapping.FieldMap.Count == 0)
                 mapping.FieldMap = new Dictionary<string, string>();
-
             return mapping;
         }
     }

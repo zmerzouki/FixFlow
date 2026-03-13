@@ -15,6 +15,10 @@
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="*"/>
             <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
 
         <TextBlock Grid.Row="0"
@@ -72,7 +76,7 @@
             </DataGrid.Columns>
         </DataGrid>
 
-        <StackPanel Grid.Row="3" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,12,0,0">
+        <StackPanel Grid.Row="7" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,12,0,0">
             <Button Content="Reload"
                     Command="{Binding ReloadCommand}"
                     Style="{StaticResource PrimaryButton}"
@@ -85,5 +89,34 @@
                     Background="#107c10"
                     Height="32"/>
         </StackPanel>
+
+        <TextBlock Grid.Row="4"
+                   Text="FIX Transport Parameters"
+                   FontSize="14"
+                   FontWeight="SemiBold"
+                   Foreground="#333"/>
+
+        <TextBlock Grid.Row="5"
+                   Margin="0,6,0,10"
+                   FontSize="11"
+                   Foreground="#666"
+                   Text="{Binding FixDefaultsStatusMessage}"/>
+
+        <DataGrid Grid.Row="6"
+                  ItemsSource="{Binding FixDefaults}"
+                  AutoGenerateColumns="False"
+                  CanUserAddRows="False"
+                  CanUserDeleteRows="False"
+                  HeadersVisibility="Column"
+                  FontSize="11"
+                  GridLinesVisibility="Horizontal"
+                  BorderBrush="#d0d0d0"
+                  BorderThickness="1">
+            <DataGrid.Columns>
+                <DataGridTextColumn Header="Key" Binding="{Binding Key}" IsReadOnly="True" Width="200"/>
+                <DataGridTextColumn Header="Value" Binding="{Binding Value, UpdateSourceTrigger=PropertyChanged}" Width="*"/>
+            </DataGrid.Columns>
+        </DataGrid>
+
     </Grid>
 </UserControl>

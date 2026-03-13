@@ -1,0 +1,297 @@
+@page "/settings"
+@implements IDisposable
+@inject HttpClient Http
+@inject NavigationManager Nav
+@inject IJSRuntime JS
+@inject FixFlow.TradeAllocBridge.Web.Client.State.SettingsState State
+
+<PageTitle>Global Settings</PageTitle>
+
+<section class="page-header">
+    <div>
+        <h1>Global Settings</h1>
+        <p>Review and update runtime configuration values.</p>
+    </div>
+</section>
+
+<div class="settings-layout">
+    <section class="card settings-card">
+        <div class="section-title">App Settings</div>
+        <div class="settings-status">@AppSettingsStatus</div>
+
+        @if (State.Settings.Count == 0)
+        {
+            <div class="empty-state">No settings found.</div>
+        }
+        else
+        {
+            <table class="settings-table">
+                <thead>
+                    <tr>
+                        <th class="settings-col-key">Key</th>
+                        <th>Value</th>
+                    </tr>
+                </thead>
+                @foreach (var group in GroupedSettings)
+                {
+                    <tbody class="settings-group">
+                        <tr class="settings-group-header">
+                            <td colspan="2">@group.Key</td>
+                        </tr>
+                        @foreach (var item in group)
+                        {
+                            <tr>
+                                <td class="settings-col-key">@item.DisplayKey</td>
+                                <td>
+                                    @if (item.IsSecret)
+                                    {
+                                        <input class="text-input"
+                                               type="password"
+                                               placeholder="@item.DisplayValue"
+                                               @bind="item.EditValue"
+                                               @bind:event="oninput"
+                                               @bind:after="() => OnSecretValueChanged(item)" />
+                                    }
+                                    else
+                                    {
+                                        <input class="text-input"
+                                               @bind="item.EditValue"
+                                               @bind:event="oninput" />
+                                    }
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                }
+            </table>
+        }
+    </section>
+
+    <section class="card settings-card" id="fix-transport-parameters">
+        <div class="section-title">FIX Transport Parameters</div>
+        <div class="settings-status">@FixDefaultsStatus</div>
+
+        @if (State.FixDefaults.Count == 0)
+        {
+            <div class="empty-state">No FIX defaults found.</div>
+        }
+        else
+        {
+            <table class="settings-table">
+                <thead>
+                    <tr>
+                        <th class="settings-col-key">Key</th>
+                        <th>Value</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var item in State.FixDefaults)
+                    {
+                        <tr>
+                            <td class="settings-col-key">@item.Key</td>
+                            <td>
+                                <input class="text-input"
+                                       @bind="item.Value"
+                                       @bind:event="oninput" />
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        }
+    </section>
+
+    <div class="button-row settings-actions">
+        <button class="btn" disabled="@_isBusy" @onclick="ReloadAsync">Reload</button>
+        <button class="btn primary" disabled="@_isBusy" @onclick="SaveAsync">Save</button>
+    </div>
+</div>
+
+@code {
+    private bool _isBusy;
+    private string? _pendingFragment;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _pendingFragment = GetFragment(Nav.Uri);
+        Nav.LocationChanged += HandleLocationChanged;
+        await LoadSettingsAsync();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (string.IsNullOrWhiteSpace(_pendingFragment))
+        {
+            return;
+        }
+
+        var fragment = _pendingFragment;
+        _pendingFragment = null;
+        await JS.InvokeVoidAsync("fixflowScrollToId", fragment);
+    }
+
+    private void HandleLocationChanged(object? sender, LocationChangedEventArgs args)
+    {
+        _pendingFragment = GetFragment(args.Location);
+        _ = InvokeAsync(StateHasChanged);
+    }
+
+    private static string? GetFragment(string uri)
+    {
+        var fragment = new Uri(uri).Fragment;
+        if (string.IsNullOrWhiteSpace(fragment))
+        {
+            return null;
+        }
+
+        return fragment.TrimStart('#');
+    }
+
+    private IEnumerable<IGrouping<string, SettingsItemView>> GroupedSettings =>
+        State.Settings
+            .GroupBy(s => s.Section)
+            .OrderBy(s => s.Key, StringComparer.OrdinalIgnoreCase);
+
+    private string AppSettingsStatus => BuildStatus(State.StatusMessage, State.AppSettingsLastModified);
+
+    private string FixDefaultsStatus => BuildStatus(State.FixDefaultsStatusMessage, State.FixDefaultsLastModified);
+
+    private async Task ReloadAsync()
+    {
+        await LoadSettingsAsync();
+    }
+
+    private async Task SaveAsync()
+    {
+        var hasAppChanges = State.Settings.Any(item =>
+            item.IsSecret ? item.HasNewSecret : !string.Equals(item.EditValue, item.OriginalValue, StringComparison.Ordinal));
+        var hasFixChanges = State.FixDefaults.Any(item =>
+            !string.Equals(item.Value, item.OriginalValue, StringComparison.Ordinal));
+
+        if (!hasAppChanges && !hasFixChanges)
+        {
+            State.StatusMessage = "No app settings changes.";
+            State.FixDefaultsStatusMessage = "No FIX default changes.";
+            return;
+        }
+
+        _isBusy = true;
+        try
+        {
+            var request = new SettingsSaveRequest(
+                State.Settings.Select(item => new SettingsUpdateItem(
+                    item.Path,
+                    item.EditValue ?? string.Empty,
+                    item.IsSecret,
+                    item.IsSecret && item.HasNewSecret)).ToList(),
+                State.FixDefaults.Select(item => new FixDefaultItemDto(item.Key, item.Value)).ToList(),
+                hasAppChanges,
+                hasFixChanges);
+
+            var response = await Http.PostAsJsonAsync("api/settings/save", request);
+            if (!response.IsSuccessStatusCode)
+            {
+                State.StatusMessage = $"Save failed ({response.StatusCode}).";
+                return;
+            }
+
+            var result = await response.Content.ReadFromJsonAsync<SettingsSaveResponse>();
+            if (result is null)
+            {
+                State.StatusMessage = "Save failed: no response.";
+                return;
+            }
+
+            State.StatusMessage = result.StatusMessage;
+            State.FixDefaultsStatusMessage = result.FixDefaultsStatusMessage;
+
+            if (result.Success)
+            {
+                await LoadSettingsAsync();
+            }
+        }
+        catch (Exception ex)
+        {
+            State.StatusMessage = $"Error saving settings: {ex.Message}";
+        }
+        finally
+        {
+            _isBusy = false;
+        }
+    }
+
+    private async Task LoadSettingsAsync()
+    {
+        _isBusy = true;
+        try
+        {
+            var response = await Http.GetFromJsonAsync<SettingsLoadResponse>("api/settings");
+            State.Settings.Clear();
+            State.FixDefaults.Clear();
+
+            if (response is null)
+            {
+                State.StatusMessage = "Failed to load settings.";
+                State.FixDefaultsStatusMessage = "Failed to load FIX defaults.";
+                return;
+            }
+
+            foreach (var item in response.Settings)
+            {
+                var view = new SettingsItemView
+                {
+                    Section = item.Section,
+                    DisplayKey = item.DisplayKey,
+                    DisplayValue = item.DisplayValue,
+                    Path = item.Path,
+                    IsSecret = item.IsSecret,
+                    Value = item.Value,
+                    OriginalValue = item.Value,
+                    EditValue = item.IsSecret ? string.Empty : item.Value,
+                    HasNewSecret = false
+                };
+                State.Settings.Add(view);
+            }
+
+            foreach (var item in response.FixDefaults)
+            {
+                State.FixDefaults.Add(new FixDefaultView { Key = item.Key, Value = item.Value, OriginalValue = item.Value });
+            }
+
+            State.StatusMessage = response.StatusMessage;
+            State.FixDefaultsStatusMessage = response.FixDefaultsStatusMessage;
+            State.AppSettingsLastModified = response.AppSettingsLastModified;
+            State.FixDefaultsLastModified = response.FixDefaultsLastModified;
+            State.HasLoaded = true;
+        }
+        catch (Exception ex)
+        {
+            State.StatusMessage = $"Error loading settings: {ex.Message}";
+            State.FixDefaultsStatusMessage = $"Error loading FIX defaults: {ex.Message}";
+        }
+        finally
+        {
+            _isBusy = false;
+        }
+    }
+
+    private void OnSecretValueChanged(SettingsItemView item)
+    {
+        item.HasNewSecret = !string.IsNullOrWhiteSpace(item.EditValue);
+    }
+
+    private static string BuildStatus(string status, string? lastModified)
+    {
+        if (string.IsNullOrWhiteSpace(lastModified))
+        {
+            return status;
+        }
+
+        return $"{status} Last modified on {lastModified}.";
+    }
+
+    public void Dispose()
+    {
+        Nav.LocationChanged -= HandleLocationChanged;
+    }
+}
