@@ -13,12 +13,9 @@ using FixFlow.TradeAllocBridge.Core.Logging;
 using FixFlow.TradeAllocBridge.Core.Mapping;
 using FixFlow.TradeAllocBridge.Core.Reporting;
 using Serilog;
-using System.Runtime.Versioning;
 using FixMessage = QuickFix.Message;
 using FixFlow.TradeAllocBridge.CLI.Services;
 using System.IO;
-
-[assembly: SupportedOSPlatform("windows7.0")]
 
 namespace FixFlow.TradeAllocBridge.CLI
 {
@@ -26,7 +23,10 @@ namespace FixFlow.TradeAllocBridge.CLI
     {
         public static async Task<int> Main(string[] args)
         {
-            Console.Title = "TradeAllocBridge CLI";
+            if (Environment.UserInteractive)
+            {
+                Console.Title = "TradeAllocBridge CLI";
+            }
 
             if (args.Length == 0 || args[0].Equals("help", StringComparison.OrdinalIgnoreCase))
             {
@@ -54,7 +54,23 @@ namespace FixFlow.TradeAllocBridge.CLI
             try
             {
                 var builder = Host.CreateApplicationBuilder(args);
-                builder.Configuration.AddJsonFile("appsettings.json", optional: false, reloadOnChange: true);
+                if (OperatingSystem.IsWindows())
+                {
+                    builder.Services.AddWindowsService();
+                }
+                if (OperatingSystem.IsLinux())
+                {
+                    builder.Services.AddSystemd();
+                }
+                builder.Configuration.AddJsonFile(
+                    Path.Combine(AppContext.BaseDirectory, "appsettings.json"),
+                    optional: false,
+                    reloadOnChange: true);
+                var sharedSettingsPath = SharedConfigResolver.ResolveSharedAppSettingsPath(AppContext.BaseDirectory);
+                if (!string.IsNullOrWhiteSpace(sharedSettingsPath))
+                {
+                    builder.Configuration.AddJsonFile(sharedSettingsPath, optional: true, reloadOnChange: true);
+                }
 
                 var config = builder.Configuration.Get<AppConfig>()!;
                 LogService.Configure(config.Logging);
@@ -82,7 +98,7 @@ namespace FixFlow.TradeAllocBridge.CLI
                     return 0;
                 }
 
-                await ProcessOnceAsync(app.Services, dryRun, CancellationToken.None);
+                await ProcessOnceAsync(app.Services, dryRun, keepEngineRunning: false, CancellationToken.None);
                 return 0;
             }
             catch (Exception ex)
@@ -108,8 +124,7 @@ namespace FixFlow.TradeAllocBridge.CLI
             builder.Services.AddSingleton<ValidationReport>();
 
             // Prepare canonical paths used by CLI
-            var baseDirCli = AppContext.BaseDirectory;
-            var activeConfigs = Path.Combine(baseDirCli, "configs");
+            var activeConfigs = ResolveCliConfigsDir();
             var incoming = Path.Combine(activeConfigs, "incoming");
 
             // Register FixMappingRepository for the CLI active configs directory
@@ -123,6 +138,38 @@ namespace FixFlow.TradeAllocBridge.CLI
             builder.Services.AddSingleton(sp =>
                 new MappingStagingWatcher(incoming, activeConfigs, sp.GetRequiredService<ILogger<MappingStagingWatcher>>())
             );
+        }
+
+        private static string ResolveCliConfigsDir()
+        {
+            const string envVar = "FIXFLOW_CLI_CONFIGS";
+            try
+            {
+                var env = Environment.GetEnvironmentVariable(envVar);
+                if (!string.IsNullOrWhiteSpace(env))
+                {
+                    var candidate = env;
+                    if (!Path.IsPathRooted(candidate))
+                    {
+                        candidate = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, candidate));
+                    }
+                    else
+                    {
+                        candidate = Path.GetFullPath(candidate);
+                    }
+
+                    if (Directory.Exists(candidate))
+                    {
+                        return candidate;
+                    }
+                }
+            }
+            catch
+            {
+                // Ignore env lookup errors and fall back.
+            }
+
+            return Path.Combine(AppContext.BaseDirectory, "configs");
         }
 
         private static void SetupMappingWatcher(IHost app)
@@ -163,7 +210,7 @@ namespace FixFlow.TradeAllocBridge.CLI
             }
         }
 
-        public static async Task ProcessOnceAsync(IServiceProvider services, bool dryRun, CancellationToken cancellationToken)
+        public static async Task ProcessOnceAsync(IServiceProvider services, bool dryRun, bool keepEngineRunning, CancellationToken cancellationToken)
         {
             var config = services.GetRequiredService<AppConfig>();
             var fixEngine = services.GetRequiredService<FixEngine>();
@@ -245,7 +292,7 @@ namespace FixFlow.TradeAllocBridge.CLI
             // -------------------------------------------------------------------
             // Dynamic FIX Session Configuration (from all mappings)
             // -------------------------------------------------------------------
-            var allMappings = new List<(string Sender, string Target)>();
+            var allMappings = new List<(string Sender, string Target, string? SenderSubId, string? TargetSubId)>();
 
             foreach (var email in emails)
             {
@@ -260,7 +307,9 @@ namespace FixFlow.TradeAllocBridge.CLI
                     var mapping = MappingConfig.Load(email.MapPath);
                     string senderComp = mapping.Predefined?.SenderCompID ?? mapping.ClientId ?? "DEFAULTSENDER";
                     string targetComp = mapping.Predefined?.TargetCompID ?? "RJSYN";
-                    allMappings.Add((senderComp, targetComp));
+                    var senderSubId = mapping.Predefined?.SenderSubID;
+                    var targetSubId = mapping.Predefined?.TargetSubID;
+                    allMappings.Add((senderComp, targetComp, senderSubId, targetSubId));
                 }
                 catch (Exception ex)
                 {
@@ -271,10 +320,16 @@ namespace FixFlow.TradeAllocBridge.CLI
             if (allMappings.Count > 0)
             {
                 fixEngine.AppendSessionsIfMissing(allMappings);
-                fixEngine.ReloadSettings(fixApp);
 
-                if (!dryRun)
+                if (dryRun)
+                {
+                    fixEngine.ReloadSettings(fixApp);
+                }
+                else if (!keepEngineRunning || !fixEngine.IsStarted)
+                {
+                    fixEngine.ReloadSettings(fixApp);
                     fixEngine.Start();
+                }
             }
             else
             {
@@ -498,7 +553,7 @@ namespace FixFlow.TradeAllocBridge.CLI
                         {
                             Console.WriteLine($"Failed to build FIX allocation for symbol '{symbol}' / side '{side}': {ex.Message}");
                             reportEntries.Add(new ValidationResult(
-                                DateTime.Now.ToString("o"),
+                                DateTime.UtcNow.ToString("o"),
                                 mapping.ClientId ?? string.Empty,
                                 reportAllocId,
                                 side,
@@ -522,6 +577,9 @@ namespace FixFlow.TradeAllocBridge.CLI
                     }
 
                     var senderCompId = mapping.Predefined?.SenderCompID ?? mapping.ClientId ?? "TRADEALLOC";
+                    var targetCompId = mapping.Predefined?.TargetCompID ?? "EXECUTOR";
+                    var senderSubId = mapping.Predefined?.SenderSubID;
+                    var targetSubId = mapping.Predefined?.TargetSubID;
                     foreach (var prepared in preparedMessages)
                     {
                         if (cancellationToken.IsCancellationRequested)
@@ -561,8 +619,19 @@ namespace FixFlow.TradeAllocBridge.CLI
                             {
                                 foreach (var sid in fixEngine.SessionSettings.GetSessions())
                                 {
-                                    if (string.Equals(sid.SenderCompID, senderCompId, StringComparison.OrdinalIgnoreCase))
+                                    if (string.Equals(sid.SenderCompID, senderCompId, StringComparison.OrdinalIgnoreCase) &&
+                                        string.Equals(sid.TargetCompID, targetCompId, StringComparison.OrdinalIgnoreCase))
                                     {
+                                        if (!string.IsNullOrWhiteSpace(senderSubId) &&
+                                            !string.Equals(sid.SenderSubID, senderSubId, StringComparison.OrdinalIgnoreCase))
+                                        {
+                                            continue;
+                                        }
+                                        if (!string.IsNullOrWhiteSpace(targetSubId) &&
+                                            !string.Equals(sid.TargetSubID, targetSubId, StringComparison.OrdinalIgnoreCase))
+                                        {
+                                            continue;
+                                        }
                                         sessionID = sid;
                                         break;
                                     }
@@ -572,7 +641,7 @@ namespace FixFlow.TradeAllocBridge.CLI
                             if (sessionID is null)
                             {
                                 status = "Failed";
-                                errorMessage = "No FIX session found for SenderCompID=" + senderCompId + ".";
+                                errorMessage = BuildSessionMissingMessage(senderCompId, targetCompId, senderSubId, targetSubId);
                                 AddGroupError(symbol, side, errorMessage);
                             }
                             else
@@ -595,7 +664,7 @@ namespace FixFlow.TradeAllocBridge.CLI
 
                         string rawFix = mergedMsg.ToString().Replace('\u0001', '|').Replace("\r", "").Replace("\n", "");
                         reportEntries.Add(new ValidationResult(
-                            DateTime.Now.ToString("o"),
+                            DateTime.UtcNow.ToString("o"),
                             mapping.ClientId ?? string.Empty,
                             FormatAllocId(allocId,
                                 mergedMsg.IsSetField(75)
@@ -661,7 +730,7 @@ namespace FixFlow.TradeAllocBridge.CLI
             report.Save();
             Console.WriteLine("Processing complete.");
 
-            if (!dryRun)
+            if (!dryRun && !keepEngineRunning)
             {
                 fixEngine.Stop();
                 Log.Information("FIX engine stopped cleanly.");
@@ -685,5 +754,27 @@ namespace FixFlow.TradeAllocBridge.CLI
 
             return defaultSeconds;
         }
+
+        private static string BuildSessionMissingMessage(
+            string senderComp,
+            string targetComp,
+            string? senderSubId,
+            string? targetSubId)
+        {
+            var parts = new List<string> { $"SenderCompID={senderComp}, TargetCompID={targetComp}" };
+            if (!string.IsNullOrWhiteSpace(senderSubId))
+            {
+                parts.Add($"SenderSubID={senderSubId}");
+            }
+            if (!string.IsNullOrWhiteSpace(targetSubId))
+            {
+                parts.Add($"TargetSubID={targetSubId}");
+            }
+
+            return "No FIX session found for " + string.Join(", ", parts) + ".";
+        }
+
     }
 }
+
+

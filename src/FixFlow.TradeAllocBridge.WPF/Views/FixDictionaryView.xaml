@@ -5,6 +5,18 @@
              xmlns:d="http://schemas.microsoft.com/expression/blend/2008" 
              mc:Ignorable="d"
              Background="#ffffff">
+    <UserControl.Resources>
+        <Style x:Key="SelectableResultText" TargetType="TextBox">
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="Padding" Value="0"/>
+            <Setter Property="IsReadOnly" Value="True"/>
+            <Setter Property="IsReadOnlyCaretVisible" Value="True"/>
+            <Setter Property="TextWrapping" Value="Wrap"/>
+            <Setter Property="VerticalScrollBarVisibility" Value="Disabled"/>
+            <Setter Property="HorizontalScrollBarVisibility" Value="Disabled"/>
+        </Style>
+    </UserControl.Resources>
     <Grid>
         <ScrollViewer VerticalScrollBarVisibility="Auto">
             <StackPanel Margin="20" Orientation="Vertical">
@@ -95,26 +107,29 @@
 
                         <WrapPanel Orientation="Horizontal"
                                    Visibility="{Binding HasTagHeader, Converter={StaticResource BoolToVisibilityConverter}}">
-                            <TextBlock FontSize="12" Foreground="#222" Text="{Binding TagHeader}"/>
-                            <TextBlock FontSize="12"
-                                       Foreground="#222"
-                                       Visibility="{Binding HasRequiredMessageInfo, Converter={StaticResource BoolToVisibilityConverter}}">
-                                <Run Text=" | "/>
-                                <Run Text="{Binding RequiredMessageInfo, Mode=OneWay}"/>
-                                <Run Text=" "/>
-                                <Run Text="{Binding RequiredMessageAnswer, Mode=OneWay}">
-                                    <Run.Style>
-                                        <Style TargetType="Run">
-                                            <Setter Property="Foreground" Value="#222"/>
-                                            <Style.Triggers>
-                                                <DataTrigger Binding="{Binding IsRequiredInMessage}" Value="True">
-                                                    <Setter Property="Foreground" Value="#d13438"/>
-                                                </DataTrigger>
-                                            </Style.Triggers>
-                                        </Style>
-                                    </Run.Style>
-                                </Run>
-                            </TextBlock>
+                            <TextBox Style="{StaticResource SelectableResultText}"
+                                     FontSize="12"
+                                     Foreground="#222"
+                                     Text="{Binding TagHeader, Mode=OneWay}"/>
+                            <TextBox Style="{StaticResource SelectableResultText}"
+                                     FontSize="12"
+                                     Foreground="#222"
+                                     Visibility="{Binding HasRequiredMessageInfo, Converter={StaticResource BoolToVisibilityConverter}}"
+                                     Text="{Binding RequiredMessageInfo, Mode=OneWay, StringFormat= | {0} }"/>
+                            <TextBox FontSize="12"
+                                     Text="{Binding RequiredMessageAnswer, Mode=OneWay}"
+                                     Visibility="{Binding HasRequiredMessageInfo, Converter={StaticResource BoolToVisibilityConverter}}">
+                                <TextBox.Style>
+                                    <Style TargetType="TextBox" BasedOn="{StaticResource SelectableResultText}">
+                                        <Setter Property="Foreground" Value="#222"/>
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding IsRequiredInMessage}" Value="True">
+                                                <Setter Property="Foreground" Value="#d13438"/>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </TextBox.Style>
+                            </TextBox>
                         </WrapPanel>
 
                         <StackPanel Margin="0,8,0,0"
@@ -123,7 +138,10 @@
                             <ItemsControl ItemsSource="{Binding TagEnumResults}">
                                 <ItemsControl.ItemTemplate>
                                     <DataTemplate>
-                                        <TextBlock FontSize="12" Foreground="#444" Text="{Binding}"/>
+                                        <TextBox Style="{StaticResource SelectableResultText}"
+                                                 FontSize="12"
+                                                 Foreground="#444"
+                                                 Text="{Binding Mode=OneWay}"/>
                                     </DataTemplate>
                                 </ItemsControl.ItemTemplate>
                             </ItemsControl>
@@ -135,7 +153,10 @@
                             <ItemsControl ItemsSource="{Binding TagMessageResults}">
                                 <ItemsControl.ItemTemplate>
                                     <DataTemplate>
-                                        <TextBlock FontSize="12" Foreground="#444" Text="{Binding}"/>
+                                        <TextBox Style="{StaticResource SelectableResultText}"
+                                                 FontSize="12"
+                                                 Foreground="#444"
+                                                 Text="{Binding Mode=OneWay}"/>
                                     </DataTemplate>
                                 </ItemsControl.ItemTemplate>
                             </ItemsControl>

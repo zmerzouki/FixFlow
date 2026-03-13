@@ -1,0 +1,832 @@
+@page "/direct-ingestion"
+@using System.Globalization
+@using System.IO
+@using Microsoft.AspNetCore.Components
+@inject HttpClient Http
+@inject IJSRuntime JS
+@inject DirectIngestionState State
+@implements IDisposable
+
+<PageTitle>Direct Ingestion</PageTitle>
+
+<section class="page-header">
+    <div>
+        <h1>Direct Ingestion</h1>
+        <p>Load allocation spreadsheets, validate mappings, and send FIX output when ready.</p>
+    </div>
+    @* <div class="status-chip @(State.IsBusy ? "is-busy" : "")">@State.StatusMessage</div> *@
+</section>
+
+<div class="grid two">
+    <section class="card">
+        <h2>Input</h2>
+        <div class="form-row">
+            <label>Organization ID</label>
+            <select class="text-input" @bind="State.Request.ClientId" @bind:after="OnClientChanged">
+                <option value="" disabled>-- Select an Organization ID --</option>
+                @foreach (var option in State.MappingOptions)
+                {
+                    <option value="@option.ClientId">@option.DisplayName</option>
+                }
+            </select>
+            @if (State.MappingOptions.Count == 0)
+            {
+                <div class="hint">No mappings found. Add <code>configs/&lt;ClientId&gt;_map.json</code> on the server.</div>
+            }
+        </div>
+        <div class="mapping-panel">
+            <div class="mapping-title">Organization Mapping Info</div>
+            @if (string.IsNullOrWhiteSpace(State.Request.ClientId))
+            {
+                <div class="hint">Select an Organization ID to view mapping details.</div>
+            }
+            else if (State.MappingDetails is null)
+            {
+                <div class="hint">Mapping details unavailable.</div>
+            }
+            else
+            {
+                <div class="mapping-grid">
+                    <div>
+                        <div class="label">Organization ID</div>
+                        <div class="value">@(State.MappingDetails.ClientId)</div>
+                    </div>
+@*                     <div>
+                        <div class="label">Sender Domain</div>
+                        <div class="value">@(State.MappingDetails.SenderDomain ?? "(None)")</div>
+                    </div>
+                    <div>
+                        <div class="label">FIX Sender/Target</div>
+                        <div class="value">@FormatFixPair(State.MappingDetails)</div>
+                    </div> *@
+                    <div>
+                        <div class="label">FIX ID (115)</div>
+                        <div class="value">@(State.MappingDetails.OnBehalfOfCompId ?? "(None)")</div>
+                    </div>
+                    <div>
+                        <div class="label">Mapped Fields</div>
+                        <div class="value">@State.MappingDetails.MappedFieldsCount</div>
+                    </div>
+                </div>
+            }
+            @if (!string.IsNullOrWhiteSpace(State.Request.ClientId))
+            {
+                <div class="mapping-toggle">
+                    <a class="mapping-link" href="" @onclick="ToggleMappingFieldsAsync" @onclick:preventDefault>
+                        @(State.ShowMappingFields ? "Show less" : "Show more")
+                    </a>
+                </div>
+                @if (State.ShowMappingFields)
+                {
+                    if (State.IsMappingFieldsLoading)
+                    {
+                        <div class="hint">Loading mapped fields...</div>
+                    }
+                    else if (State.MappingFields.Count == 0)
+                    {
+                        <div class="hint">No mapped fields found.</div>
+                    }
+                    else
+                    {
+                        <div class="mapping-fields">
+                            @foreach (var field in State.MappingFields)
+                            {
+                                <div class="mapping-item">
+                                    <span class="mapping-tag">@FormatTagDisplay(field)</span>
+                                    <span class="mapping-arrow" aria-hidden="true">
+                                        <svg class="mapping-arrow-icon" viewBox="0 0 120 24" focusable="false">
+                                            <line x1="2" y1="12" x2="94" y2="12" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+                                            <polyline points="90,6 104,12 90,18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+                                        </svg>
+                                    </span>
+                                    <span class="mapping-column">@field.ColumnName</span>
+                                    <span class="mapping-separator">|</span>
+                                    <span class="mapping-required">Required: @(field.IsRequired ? "Yes" : "No")</span>
+                                </div>
+                            }
+                        </div>
+                    }
+                }
+            }
+        </div>
+        @if (RequiresOnBehalfOfCompId)
+        {
+            <div class="form-row">
+                <label>FIX ID (115)</label>
+                <input class="text-input" @bind="State.Request.OnBehalfOfCompId" placeholder="Enter FIX ID (115)" />
+                <div class="hint warning">Required for DEFAULT client.</div>
+            </div>
+        }
+        <div class="form-row">
+            <label>Mode</label>
+            <div class="toggle-row">
+                <input type="checkbox" id="dryRun" @bind="State.Request.DryRun" />
+                <label for="dryRun">Dry run (validate only)</label>
+            </div>
+        </div>
+        <div class="form-row">
+            <label>Allocation File</label>
+            <div class="dropzone @(State.IsDragActive ? "is-active" : "")"
+                 @ondragover="OnDragOver"
+                 @ondragleave="OnDragLeave"
+                 @ondragover:preventDefault>
+                <InputFile @key="_fileInputKey" class="dropzone-input" OnChange="OnFileSelected" accept=".csv,.xls,.xlsx" />
+                <div class="dropzone-content">
+                    <div class="dropzone-title">Drag & drop your spreadsheet</div>
+                    @if (!string.IsNullOrWhiteSpace(State.SelectedSampleName))
+                    {
+                        <div class="file-chip">
+                            <span class="file-icon" aria-hidden="true">
+                                <svg viewBox="0 0 24 24" focusable="false">
+                                    <path d="M6 3h8l4 4v14H6z" fill="none" stroke="currentColor" stroke-width="1.5" />
+                                    <path d="M14 3v5h5" fill="none" stroke="currentColor" stroke-width="1.5" />
+                                    <rect x="8" y="11" width="8" height="6" fill="none" stroke="currentColor" stroke-width="1.2" />
+                                    <path d="M8 13h8M8 15h8" fill="none" stroke="currentColor" stroke-width="1" />
+                                </svg>
+                            </span>
+                            <span class="file-text">@State.SelectedSampleName</span>
+                            <span class="file-size">(Sample)</span>
+                            <button type="button"
+                                    class="file-remove"
+                                    title="Remove sample"
+                                    aria-label="Remove sample"
+                                    disabled="@State.IsBusy"
+                                    @onclick="ClearSelectedFile"
+                                    @onclick:stopPropagation="true">
+                                <svg viewBox="0 0 24 24" focusable="false" aria-hidden="true">
+                                    <path d="M9 3h6l1 2h4v2H4V5h4l1-2z" fill="none" stroke="currentColor" stroke-width="1.5" />
+                                    <path d="M6 7h12l-1 13H7L6 7z" fill="none" stroke="currentColor" stroke-width="1.5" />
+                                    <path d="M10 11v6M14 11v6" fill="none" stroke="currentColor" stroke-width="1.5" />
+                                </svg>
+                            </button>
+                        </div>
+                    }
+                    else if (State.SelectedFileName is not null)
+                    {
+                        <div class="file-chip">
+                            <span class="file-icon" aria-hidden="true">
+                                <svg viewBox="0 0 24 24" focusable="false">
+                                    <path d="M6 3h8l4 4v14H6z" fill="none" stroke="currentColor" stroke-width="1.5" />
+                                    <path d="M14 3v5h5" fill="none" stroke="currentColor" stroke-width="1.5" />
+                                    <rect x="8" y="11" width="8" height="6" fill="none" stroke="currentColor" stroke-width="1.2" />
+                                    <path d="M8 13h8M8 15h8" fill="none" stroke="currentColor" stroke-width="1" />
+                                </svg>
+                            </span>
+                            <span class="file-text">@State.SelectedFileName</span>
+                            <span class="file-size">(@State.SelectedFileSizeKb KB)</span>
+                            <button type="button"
+                                    class="file-remove"
+                                    title="Remove file"
+                                    aria-label="Remove file"
+                                    disabled="@State.IsBusy"
+                                    @onclick="ClearSelectedFile"
+                                    @onclick:stopPropagation="true">
+                                <svg viewBox="0 0 24 24" focusable="false" aria-hidden="true">
+                                    <path d="M9 3h6l1 2h4v2H4V5h4l1-2z" fill="none" stroke="currentColor" stroke-width="1.5" />
+                                    <path d="M6 7h12l-1 13H7L6 7z" fill="none" stroke="currentColor" stroke-width="1.5" />
+                                    <path d="M10 11v6M14 11v6" fill="none" stroke="currentColor" stroke-width="1.5" />
+                                </svg>
+                            </button>
+                        </div>
+                    }
+                    <div class="dropzone-subtitle">or click to browse (.csv, .xls, .xlsx)</div>
+                    @if (!string.IsNullOrWhiteSpace(State.FileErrorMessage))
+                    {
+                        <div class="error">@State.FileErrorMessage</div>
+                    }
+                </div>
+            </div>
+        </div>
+        <div class="button-row">
+            <button class="btn primary" disabled="@(!CanSubmit)" @onclick="SubmitAsync">Submit</button>
+            <button class="btn" disabled="@State.IsBusy" @onclick="Discard">Discard</button>
+        </div>
+    </section>
+
+    <section class="card">
+        <h2>Results</h2>
+        <div class="ff-progress-label">Processing Progress</div>
+        <div class="ff-progress-block">
+            @if (State.IsBusy)
+            {
+                <div class="ff-progress-track">
+                    <div class="ff-progress-fill is-active" style="width:@State.ProgressPercent%"></div>
+                </div>
+            }
+            else if (State.Preview is not null)
+            {
+                <div class="ff-progress-segments">
+                    <div class="segment fail" style="width:@FailedPercent"></div>
+                    <div class="segment success" style="width:@SuccessPercent"></div>
+                </div>
+            }
+            else
+            {
+                <div class="ff-progress-track">
+                    <div class="ff-progress-fill" style="width:0%"></div>
+                </div>
+            }
+        </div>
+        @if (State.Preview is null)
+        {
+            <div class="empty-state">Submit to see processing results.</div>
+        }
+        else
+        {
+            <div class="summary-grid">
+                <div>
+                    <div class="label">Allocations Submitted</div>
+                    <div class="value">@State.Preview.AllocationsSubmitted</div>
+                </div>
+                <div>
+                    <div class="label">Allocations Processed</div>
+                    <div class="value">@State.Preview.AllocationsProcessed</div>
+                </div>
+                <div>
+                    <div class="label">Allocations Sent</div>
+                    <div class="value">@State.Preview.AllocationsSent</div>
+                </div>
+                <div>
+                    <div class="label">Successful</div>
+                    <div class="value">@State.Preview.SuccessfulAllocations</div>
+                </div>
+                <div>
+                    <div class="label">Failed</div>
+                    <div class="value">@State.Preview.FailedAllocations</div>
+                </div>
+            </div>
+            @if (!string.IsNullOrWhiteSpace(State.Preview.ResultSuccessMessage))
+            {
+                <div class="hint">@State.Preview.ResultSuccessMessage</div>
+            }
+            @if (!string.IsNullOrWhiteSpace(State.Preview.ResultFailureMessage))
+            {
+                <div class="error">@State.Preview.ResultFailureMessage</div>
+            }
+            @if (VisibleWarnings.Count > 0)
+            {
+                <div class="warnings">
+                    @foreach (var warning in VisibleWarnings)
+                    {
+                        <div class="warning-item">@warning</div>
+                    }
+                </div>
+            }
+            @if (State.Preview.Messages.Count == 0)
+            {
+                <div class="empty-state">No messages were generated.</div>
+            }
+            else
+            {
+                <div class="table">
+                    <div class="table-header">
+                        <span>Alloc ID</span>
+                        <span>Symbol</span>
+                        <span>Side</span>
+                        <span>Trades</span>
+                        <span>Status</span>
+                        <span>Actions</span>
+                    </div>
+                    @foreach (var msg in State.Preview.Messages)
+                    {
+                        <div class="table-row">
+                            <span>@msg.AllocId</span>
+                            <span>@msg.Symbol</span>
+                            <span>@msg.Side</span>
+                            <span>@msg.TradeCount</span>
+                            <span>@msg.Status</span>
+                            <span>
+                                <button class="btn small" disabled="@(string.IsNullOrWhiteSpace(msg.RawFix))" @onclick="() => CopyFixAsync(msg.RawFix)">Copy</button>
+                            </span>
+                        </div>
+                        <div class="table-row details">
+                            <span class="mono">@(string.IsNullOrWhiteSpace(msg.RawFix) ? "(No FIX generated)" : msg.RawFix)</span>
+                            <span class="error">@msg.ErrorMessage</span>
+                        </div>
+                    }
+                </div>
+            }
+        }
+    </section>
+</div>
+
+@code {
+    [SupplyParameterFromQuery(Name = "clientId")]
+    public string? ClientId { get; set; }
+
+    [SupplyParameterFromQuery(Name = "sample")]
+    public string? Sample { get; set; }
+
+    private int _fileInputKey;
+    private CancellationTokenSource? _progressCts;
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (!State.HasLoadedMappings)
+        {
+            await LoadMappingsAsync();
+        }
+        await RefreshSelectedMappingAsync(State.ShowMappingFields);
+
+        if (State.IsBusy)
+        {
+            StartProgress();
+        }
+    }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (!string.IsNullOrWhiteSpace(ClientId))
+        {
+            var needsMappingRefresh = !State.HasLoadedMappings
+                || State.MappingOptions.All(m => !string.Equals(m.ClientId, ClientId, StringComparison.OrdinalIgnoreCase));
+
+            if (needsMappingRefresh)
+            {
+                await LoadMappingsAsync();
+            }
+
+            if (!string.Equals(State.Request.ClientId, ClientId, StringComparison.OrdinalIgnoreCase))
+            {
+                State.Request.ClientId = ClientId;
+                await OnClientChanged();
+            }
+            else
+            {
+                await RefreshSelectedMappingAsync(State.ShowMappingFields);
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(Sample))
+        {
+            SetSelectedSample(Sample);
+        }
+    }
+
+    private async Task RefreshSelectedMappingAsync(bool refreshFields)
+    {
+        var clientId = State.Request.ClientId;
+        if (string.IsNullOrWhiteSpace(clientId))
+        {
+            return;
+        }
+
+        await LoadMappingDetailsAsync(clientId);
+
+        if (!refreshFields)
+        {
+            return;
+        }
+
+        State.MappingFields.Clear();
+        State.MappingFieldsClientId = null;
+        await EnsureMappingFieldsLoadedAsync(clientId);
+    }
+
+    private async Task LoadMappingsAsync()
+    {
+        try
+        {
+            var response = await Http.GetFromJsonAsync<List<MappingOption>>("api/mappings");
+            if (response is not null && response.Count > 0)
+            {
+                State.MappingOptions.Clear();
+                State.MappingOptions.AddRange(response);
+            }
+            else
+            {
+                State.MappingOptions.Clear();
+                State.MappingOptions.Add(new MappingOption("DEFAULT", "DEFAULT", false, null));
+            }
+        }
+        catch
+        {
+            State.MappingOptions.Clear();
+            State.MappingOptions.Add(new MappingOption("DEFAULT", "DEFAULT", false, null));
+        }
+
+        State.HasLoadedMappings = true;
+
+        if (!string.IsNullOrWhiteSpace(State.Request.ClientId))
+        {
+            await LoadMappingDetailsAsync(State.Request.ClientId);
+        }
+    }
+
+    private async Task LoadMappingDetailsAsync(string clientId)
+    {
+        if (string.IsNullOrWhiteSpace(clientId))
+        {
+            State.MappingDetails = null;
+            return;
+        }
+
+        try
+        {
+            State.MappingDetails = await Http.GetFromJsonAsync<MappingDetails>($"api/mappings/{Uri.EscapeDataString(clientId)}");
+        }
+        catch
+        {
+            State.MappingDetails = null;
+        }
+    }
+
+    private async Task OnClientChanged()
+    {
+        if (!RequiresOnBehalfOfCompId)
+        {
+            State.Request.OnBehalfOfCompId = string.Empty;
+        }
+
+        if (string.IsNullOrWhiteSpace(State.Request.ClientId))
+        {
+            State.MappingDetails = null;
+            State.MappingFields.Clear();
+            State.MappingFieldsClientId = null;
+            State.ShowMappingFields = false;
+            return;
+        }
+
+        await LoadMappingDetailsAsync(State.Request.ClientId);
+        State.MappingFields.Clear();
+        State.MappingFieldsClientId = null;
+        State.ShowMappingFields = false;
+    }
+
+    private async Task OnFileSelected(InputFileChangeEventArgs args)
+    {
+        var file = args.File;
+        State.FileErrorMessage = null;
+        State.SelectedFileBytes = null;
+        State.SelectedFileContentType = null;
+
+        ClearSelectedSample();
+        if (!IsSupportedFile(file.Name))
+        {
+            State.SelectedFile = null;
+            State.SelectedFileName = null;
+            State.SelectedFileSizeKb = 0;
+            State.SelectedFileBytes = null;
+            State.SelectedFileContentType = null;
+            State.FileErrorMessage = "Unsupported file type. Please use .xlsx, .xls, or .csv files.";
+            State.StatusMessage = State.FileErrorMessage;
+            ResetFileInput();
+            return;
+        }
+
+        try
+        {
+            await using var stream = file.OpenReadStream(50 * 1024 * 1024);
+            using var buffer = new MemoryStream();
+            await stream.CopyToAsync(buffer);
+            State.SelectedFileBytes = buffer.ToArray();
+            State.SelectedFileContentType = string.IsNullOrWhiteSpace(file.ContentType)
+                ? "application/octet-stream"
+                : file.ContentType;
+        }
+        catch
+        {
+            State.SelectedFile = null;
+            State.SelectedFileName = null;
+            State.SelectedFileSizeKb = 0;
+            State.SelectedFileBytes = null;
+            State.SelectedFileContentType = null;
+            State.FileErrorMessage = "Failed to read file. Please reselect it.";
+            State.StatusMessage = State.FileErrorMessage;
+            ResetFileInput();
+            return;
+        }
+
+        State.SelectedFile = file;
+        State.SelectedFileName = file.Name;
+        State.SelectedFileSizeKb = (long)Math.Ceiling(file.Size / 1024.0);
+        State.IsDragActive = false;
+    }
+
+    private void OnDragOver(DragEventArgs _)
+    {
+        State.IsDragActive = true;
+    }
+
+    private void OnDragLeave(DragEventArgs _)
+    {
+        State.IsDragActive = false;
+    }
+
+    private void ClearSelectedFile()
+    {
+        if (State.IsBusy)
+        {
+            return;
+        }
+
+        StopProgress();
+        ResetFileInput();
+        State.SelectedFile = null;
+        State.SelectedFileName = null;
+        State.SelectedFileSizeKb = 0;
+        State.SelectedFileBytes = null;
+        State.SelectedFileContentType = null;
+        State.FileErrorMessage = null;
+        ClearSelectedSample();
+        State.Preview = null;
+        State.ProgressPercent = 0;
+        State.IsDragActive = false;
+        State.StatusMessage = "Ready";
+    }
+
+    private void SetSelectedSample(string sampleName)
+    {
+        ClearSelectedFileOnly();
+        State.SelectedSampleName = sampleName.Trim();
+        State.SelectedFileName = State.SelectedSampleName;
+        State.SelectedFileSizeKb = 0;
+    }
+
+    private void ClearSelectedSample()
+    {
+        State.SelectedSampleName = null;
+    }
+
+    private void ClearSelectedFileOnly()
+    {
+        ResetFileInput();
+        State.SelectedFile = null;
+        State.SelectedFileName = null;
+        State.SelectedFileSizeKb = 0;
+        State.SelectedFileBytes = null;
+        State.SelectedFileContentType = null;
+        State.FileErrorMessage = null;
+    }
+
+    private async Task SubmitAsync()
+    {
+        if (!CanSubmit)
+        {
+            State.StatusMessage = RequiresOnBehalfOfCompId
+                ? "Please enter a FIX ID (tag 115)."
+                : "Please choose a client and an allocation file or sample.";
+            return;
+        }
+
+        State.IsBusy = true;
+        State.StatusMessage = State.Request.DryRun ? "Validating..." : "Processing...";
+        State.Preview = null;
+        StartProgress();
+
+        try
+        {
+            using var content = new MultipartFormDataContent();
+            content.Add(new StringContent(State.Request.ClientId ?? "DEFAULT"), "ClientId");
+            content.Add(new StringContent(State.Request.DryRun.ToString(CultureInfo.InvariantCulture)), "DryRun");
+            if (!string.IsNullOrWhiteSpace(State.Request.OnBehalfOfCompId))
+            {
+                content.Add(new StringContent(State.Request.OnBehalfOfCompId.Trim().ToUpperInvariant()), "OnBehalfOfCompId");
+            }
+
+            if (State.SelectedFileBytes is null && string.IsNullOrWhiteSpace(State.SelectedSampleName))
+            {
+                State.StatusMessage = "Please reselect your allocation file.";
+                return;
+            }
+
+            if (State.SelectedFileBytes is not null)
+            {
+                var fileContent = new ByteArrayContent(State.SelectedFileBytes);
+                var contentType = string.IsNullOrWhiteSpace(State.SelectedFileContentType)
+                    ? "application/octet-stream"
+                    : State.SelectedFileContentType;
+                fileContent.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue(contentType);
+                var fileName = string.IsNullOrWhiteSpace(State.SelectedFileName)
+                    ? "allocation.csv"
+                    : State.SelectedFileName;
+                content.Add(fileContent, "File", fileName);
+            }
+            else if (!string.IsNullOrWhiteSpace(State.SelectedSampleName))
+            {
+                content.Add(new StringContent(State.SelectedSampleName), "SampleName");
+            }
+
+            var response = await Http.PostAsync("api/ingestion/process", content);
+            if (response.IsSuccessStatusCode)
+            {
+                State.Preview = await response.Content.ReadFromJsonAsync<IngestionPreviewResponse>();
+                State.StatusMessage = State.Preview?.Status ?? "Ready";
+            }
+            else
+            {
+                State.StatusMessage = $"Request failed ({response.StatusCode}).";
+            }
+        }
+        catch (Exception ex)
+        {
+            State.StatusMessage = $"Error: {ex.Message}";
+        }
+        finally
+        {
+            State.IsBusy = false;
+            StopProgress();
+            State.ProgressPercent = State.Preview is not null ? 100 : 0;
+        }
+    }
+
+    private async Task CopyFixAsync(string rawFix)
+    {
+        if (string.IsNullOrWhiteSpace(rawFix))
+        {
+            return;
+        }
+
+        try
+        {
+            await JS.InvokeVoidAsync("navigator.clipboard.writeText", rawFix);
+        }
+        catch
+        {
+            State.StatusMessage = "Failed to copy FIX message.";
+        }
+    }
+
+    private void Discard()
+    {
+        if (State.IsBusy)
+        {
+            return;
+        }
+
+        StopProgress();
+        ResetFileInput();
+        ClearSelectedFileOnly();
+        ClearSelectedSample();
+        State.Preview = null;
+        State.ProgressPercent = 0;
+        State.IsDragActive = false;
+        State.Request = new IngestionPreviewRequest { ClientId = string.Empty, DryRun = true };
+        State.MappingDetails = null;
+        State.MappingFields.Clear();
+        State.MappingFieldsClientId = null;
+        State.ShowMappingFields = false;
+        State.StatusMessage = "Ready";
+    }
+
+    private void ResetFileInput()
+    {
+        _fileInputKey++;
+    }
+
+    private bool RequiresOnBehalfOfCompId =>
+        string.Equals(State.Request.ClientId, "DEFAULT", StringComparison.OrdinalIgnoreCase);
+
+    private bool CanSubmit =>
+        !State.IsBusy
+        && (State.SelectedFileBytes is not null || !string.IsNullOrWhiteSpace(State.SelectedSampleName))
+        && !string.IsNullOrWhiteSpace(State.Request.ClientId)
+        && (!RequiresOnBehalfOfCompId || !string.IsNullOrWhiteSpace(State.Request.OnBehalfOfCompId));
+
+    private string SuccessPercent =>
+        State.Preview is null || State.Preview.AllocationsSubmitted == 0
+            ? "0%"
+            : $"{State.Preview.SuccessfulAllocations * 100.0 / State.Preview.AllocationsSubmitted:F1}%";
+
+    private string FailedPercent =>
+        State.Preview is null || State.Preview.AllocationsSubmitted == 0
+            ? "0%"
+            : $"{State.Preview.FailedAllocations * 100.0 / State.Preview.AllocationsSubmitted:F1}%";
+
+    private IReadOnlyList<string> VisibleWarnings
+    {
+        get
+        {
+            if (State.Preview is null || State.Preview.Warnings.Count == 0)
+            {
+                return Array.Empty<string>();
+            }
+
+            var failure = State.Preview.ResultFailureMessage?.Trim();
+            return State.Preview.Warnings
+                .Where(warning => !string.IsNullOrWhiteSpace(warning)
+                    && (string.IsNullOrWhiteSpace(failure)
+                        || !string.Equals(warning.Trim(), failure, StringComparison.OrdinalIgnoreCase)))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+        }
+    }
+
+    private static bool IsSupportedFile(string fileName)
+    {
+        var extension = Path.GetExtension(fileName);
+        return extension is not null &&
+               (extension.Equals(".xlsx", StringComparison.OrdinalIgnoreCase)
+                || extension.Equals(".xls", StringComparison.OrdinalIgnoreCase)
+                || extension.Equals(".csv", StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static string FormatFixPair(MappingDetails details)
+    {
+        if (string.IsNullOrWhiteSpace(details.FixSenderCompId) && string.IsNullOrWhiteSpace(details.FixTargetCompId))
+        {
+            return "(None)";
+        }
+
+        return $"{details.FixSenderCompId ?? "?"} -> {details.FixTargetCompId ?? "?"}";
+    }
+
+    private static string FormatTagDisplay(MappingFieldDetail field)
+    {
+        return string.IsNullOrWhiteSpace(field.TagName)
+            ? $"Tag {field.Tag}"
+            : $"Tag {field.Tag} ({field.TagName})";
+    }
+
+    private async Task ToggleMappingFieldsAsync()
+    {
+        if (string.IsNullOrWhiteSpace(State.Request.ClientId))
+        {
+            State.ShowMappingFields = false;
+            return;
+        }
+
+        if (!State.ShowMappingFields)
+        {
+            await EnsureMappingFieldsLoadedAsync(State.Request.ClientId);
+        }
+
+        State.ShowMappingFields = !State.ShowMappingFields;
+    }
+
+    private async Task EnsureMappingFieldsLoadedAsync(string clientId)
+    {
+        if (State.MappingFieldsClientId == clientId && State.MappingFields.Count > 0)
+        {
+            return;
+        }
+
+        State.IsMappingFieldsLoading = true;
+        State.MappingFields.Clear();
+        State.MappingFieldsClientId = clientId;
+        await InvokeAsync(StateHasChanged);
+
+        try
+        {
+            var fields = await Http.GetFromJsonAsync<List<MappingFieldDetail>>(
+                $"api/mappings/{Uri.EscapeDataString(clientId)}/fields");
+            if (fields is not null)
+            {
+                State.MappingFields.AddRange(fields);
+            }
+        }
+        catch
+        {
+            State.MappingFields.Clear();
+        }
+        finally
+        {
+            State.IsMappingFieldsLoading = false;
+        }
+    }
+
+    private void StartProgress()
+    {
+        StopProgress();
+        State.ProgressPercent = 8;
+        _progressCts = new CancellationTokenSource();
+        var token = _progressCts.Token;
+
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                while (!token.IsCancellationRequested)
+                {
+                    await Task.Delay(250, token);
+                    if (State.ProgressPercent < 90)
+                    {
+                        State.ProgressPercent += 4;
+                        await InvokeAsync(StateHasChanged);
+                    }
+                }
+            }
+            catch (TaskCanceledException)
+            {
+                // Expected when stopping.
+            }
+        }, token);
+    }
+
+    private void StopProgress()
+    {
+        if (_progressCts is null)
+        {
+            return;
+        }
+
+        _progressCts.Cancel();
+        _progressCts.Dispose();
+        _progressCts = null;
+    }
+
+    public void Dispose()
+    {
+        StopProgress();
+    }
+}

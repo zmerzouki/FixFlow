@@ -1,0 +1,14 @@
+<Project>
+  <Target Name="FixFlowPostPublish"
+          AfterTargets="Publish"
+          Condition="'$(IsPublishable)' == 'true' and '$(PublishDir)' != ''">
+    <PropertyGroup>
+      <_FixFlowSharedDir Condition="'$(FixFlowSharedDir)' != ''">$(FixFlowSharedDir)</_FixFlowSharedDir>
+      <_FixFlowSharedDir Condition="'$(_FixFlowSharedDir)' == ''">$([System.IO.Path]::GetFullPath('$(PublishDir)..\\Shared'))</_FixFlowSharedDir>
+      <_FixFlowPublishScript>$(MSBuildThisFileDirectory)build\PublishFixFlow.ps1</_FixFlowPublishScript>
+      <_FixFlowPublishDir>$([System.String]::Copy('$(PublishDir)').TrimEnd('\'))</_FixFlowPublishDir>
+    </PropertyGroup>
+    <Exec Condition="Exists('$(_FixFlowPublishScript)')"
+          Command="powershell -NoProfile -ExecutionPolicy Bypass -File &quot;$(_FixFlowPublishScript)&quot; -PublishDir &quot;$(_FixFlowPublishDir)&quot; -FixFlowSharedDir &quot;$(_FixFlowSharedDir)&quot;" />
+  </Target>
+</Project>

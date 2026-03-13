@@ -9,9 +9,12 @@ using System.Windows.Input;
 using Microsoft.Extensions.Logging;
 using FixFlow.TradeAllocBridge.Core.Config;
 using FixFlow.TradeAllocBridge.Core.Mapping;
+using FixFlow.TradeAllocBridge.Core.Fix;
 using System.ComponentModel;
 using System;
 using System.Xml.Linq;
+using System.Globalization;
+using Microsoft.Extensions.Configuration;
 
 namespace FixFlow.TradeAllocBridge.WPF.ViewModels
 {
@@ -19,6 +22,7 @@ namespace FixFlow.TradeAllocBridge.WPF.ViewModels
     {
         private readonly FixMappingRepository _mappingRepo;
         private readonly ILogger<MapEditorViewModel> _logger;
+        private readonly IConfiguration _configuration;
         private readonly string _configDir;
         private readonly string _cliConfigsDir;
 
@@ -32,10 +36,12 @@ namespace FixFlow.TradeAllocBridge.WPF.ViewModels
         private string _newFieldName = string.Empty;
         private string _newFieldTag = string.Empty;
         private string _newFieldTagInput = string.Empty;
+        private string _dependencyWarningMessage = string.Empty;
         private bool _isFixFieldSuggestionOpen;
         private FixFieldOption? _selectedFixFieldSuggestion;
         private bool _suppressFixFieldSuggestion;
         private bool _isProgrammaticSenderCompSet;
+        private bool _hasDependencyDefaultChanges;
         private bool _isEditing;
         private bool _isFirstVisit = true;
         private string _statusMessage = "Ready";
@@ -45,13 +51,17 @@ namespace FixFlow.TradeAllocBridge.WPF.ViewModels
         private bool _suppressChangeTracking;
         private string _incomingFolderPath = string.Empty;
         private string _dateCreated = string.Empty;
+        private string _dateValidated = string.Empty;
         private string _dateModified = string.Empty;
         private string _emailAutomationStatus = "Inactive";
+        private string _senderDomainWarning = string.Empty;
+        private readonly Dictionary<string, string> _defaultTagValues = new(StringComparer.OrdinalIgnoreCase);
+        private readonly Dictionary<string, Dictionary<string, string>> _fieldDefaultTagValues = new(StringComparer.OrdinalIgnoreCase);
         private const string DefaultClientIdPlaceholder = "CLIENT1";
         private const string DefaultSenderDomainPlaceholder = "ACME.COM";
         private const string DefaultSenderCompIdPlaceholder = "FIXFLOW";
         private const string DefaultTargetCompIdPlaceholder = "BROKER";
-        private static readonly string[] RequiredFixTags = { "54", "55", "79", "80", "153" };
+        private static readonly string[] RequiredFixTags = { "54", "79", "80", "153" };
         private static readonly string[] Fix42FieldNames =
         {
             "Side",
@@ -118,6 +128,13 @@ namespace FixFlow.TradeAllocBridge.WPF.ViewModels
             "MiscFeeCurr",
             "MiscFeeType"
         };
+        private static readonly Dictionary<string, string[]> TagDependencies = new(StringComparer.OrdinalIgnoreCase)
+        {
+            ["12"] = new[] { "13" },          // Commission -> CommType
+            ["13"] = new[] { "12" },          // CommType -> Commission
+            ["137"] = new[] { "139", "138" }, // MiscFeeAmt -> MiscFeeType + MiscFeeCurr
+            ["139"] = new[] { "137", "138" }  // MiscFeeType -> MiscFeeAmt + MiscFeeCurr
+        };
         private readonly List<FixFieldOption> _fixFieldOptions;
 
         // Available FIX tags for dropdowns
@@ -150,6 +167,7 @@ namespace FixFlow.TradeAllocBridge.WPF.ViewModels
         public ObservableCollection<string> AvailableMappings { get; }
         public ObservableCollection<KeyValuePair<string, string>> FieldMappings { get; }
         public ObservableCollection<FixFieldOption> FixFieldSuggestions { get; }
+        public ObservableCollection<DependencyDefaultItem> DependencyDefaults { get; }
         public ICommand NewMappingCommand { get; }
         public ICommand EditMappingCommand { get; }
         public ICommand ValidateMappingCommand { get; }
@@ -164,20 +182,22 @@ namespace FixFlow.TradeAllocBridge.WPF.ViewModels
         public ICommand TestMappingCommand { get; }
         public ICommand DeployMappingCommand { get; }
 
-        public MapEditorViewModel(FixMappingRepository mappingRepo, ILogger<MapEditorViewModel> logger)
+        public MapEditorViewModel(FixMappingRepository mappingRepo, ILogger<MapEditorViewModel> logger, IConfiguration configuration)
         {
             _mappingRepo = mappingRepo;
             _logger = logger;
+            _configuration = configuration;
             _configDir = _mappingRepo.BaseDirectory;
             // Use resolver instead of fragile hardcoded relative path
             _cliConfigsDir = ResolveCliConfigsDir();
             _testResults = new ObservableCollection<FixMessageResult>();
-            _hasUnsavedChanges = false;
+            SetUnsavedChanges(false);
             _suppressChangeTracking = false;
 
             AvailableMappings = new ObservableCollection<string>();
             FieldMappings = new ObservableCollection<KeyValuePair<string, string>>();
             FixFieldSuggestions = new ObservableCollection<FixFieldOption>();
+            DependencyDefaults = new ObservableCollection<DependencyDefaultItem>();
             _fixFieldOptions = LoadFixFieldOptions();
 
             NewMappingCommand = new RelayCommand(NewMapping);
@@ -192,7 +212,7 @@ namespace FixFlow.TradeAllocBridge.WPF.ViewModels
             MoveFieldUpCommand = new RelayCommand(MoveFieldUp, () => CanMoveFieldUp);
             MoveFieldDownCommand = new RelayCommand(MoveFieldDown, () => CanMoveFieldDown);
             TestMappingCommand = new RelayCommand(TestMapping, () => !IsEditing && SelectedMapping != null);
-            DeployMappingCommand = new RelayCommand(DeployMapping, () => !IsEditing && SelectedMapping != null);
+            DeployMappingCommand = new RelayCommand(DeployMapping, () => CanDeployMapping);
 
             LoadAvailableMappings();
         }
@@ -217,6 +237,7 @@ namespace FixFlow.TradeAllocBridge.WPF.ViewModels
                 StatusMessage = $"Error loading mappings: {ex.Message}";
                 _logger.LogError(ex, "Failed to load mappings");
             }
+            UpdateSenderDomainWarning();
         }
 
         private string? _selectedMapping;
@@ -231,7 +252,10 @@ namespace FixFlow.TradeAllocBridge.WPF.ViewModels
                     OnPropertyChanged(nameof(SelectedMapping));
                     OnPropertyChanged(nameof(ShowMappingDetails));
                     OnPropertyChanged(nameof(CanValidateMapping));
+                    OnPropertyChanged(nameof(CanDeployMapping));
+                    OnPropertyChanged(nameof(DeployTooltip));
                     CommandManager.InvalidateRequerySuggested();
+                    UpdateSenderDomainWarning();
                     if (!IsEditing && value != null)
                     {
                         LoadMappingDetails(value);
@@ -247,12 +271,14 @@ namespace FixFlow.TradeAllocBridge.WPF.ViewModels
             {
                 var mapFile = Path.Combine(_configDir, $"{clientId}_map.json");
                 DateCreated = string.Empty;
+                DateValidated = string.Empty;
                 DateModified = string.Empty;
                 EmailAutomationStatus = "Inactive";
                 if (File.Exists(mapFile))
                 {
                     UpdateMappingMetadata(mapFile, clientId);
                     _currentMapping = MappingConfig.Load(mapFile);
+                    DateValidated = _currentMapping.DateValidated ?? string.Empty;
                     _isProgrammaticSenderCompSet = true;
                     SenderCompId = _currentMapping.Predefined?.SenderCompID ?? string.Empty;
                     _isProgrammaticSenderCompSet = false;
@@ -266,13 +292,64 @@ namespace FixFlow.TradeAllocBridge.WPF.ViewModels
                     {
                         FieldMappings.Add(new KeyValuePair<string, string>(kvp.Key, kvp.Value));
                     }
+                    _defaultTagValues.Clear();
+                    if (_currentMapping.DefaultTagValues != null)
+                    {
+                        foreach (var kvp in _currentMapping.DefaultTagValues)
+                        {
+                            var key = NormalizeTagKey(kvp.Key);
+                            var value = kvp.Value?.Trim() ?? string.Empty;
+                            if (!string.IsNullOrWhiteSpace(key) && !string.IsNullOrWhiteSpace(value))
+                            {
+                                _defaultTagValues[key] = value;
+                            }
+                        }
+                    }
+                    _fieldDefaultTagValues.Clear();
+                    if (_currentMapping.FieldDefaultTagValues != null)
+                    {
+                        foreach (var columnEntry in _currentMapping.FieldDefaultTagValues)
+                        {
+                            var column = columnEntry.Key?.Trim();
+                            if (string.IsNullOrWhiteSpace(column))
+                            {
+                                continue;
+                            }
+
+                            var tagDefaults = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                            if (columnEntry.Value != null)
+                            {
+                                foreach (var tagEntry in columnEntry.Value)
+                                {
+                                    var tag = NormalizeTagKey(tagEntry.Key);
+                                    var value = tagEntry.Value?.Trim() ?? string.Empty;
+                                    if (string.IsNullOrWhiteSpace(tag) || string.IsNullOrWhiteSpace(value))
+                                    {
+                                        continue;
+                                    }
+
+                                    tagDefaults[tag] = value;
+                                }
+                            }
+
+                            if (tagDefaults.Count > 0)
+                            {
+                                _fieldDefaultTagValues[column] = tagDefaults;
+                            }
+                        }
+                    }
+                    ClearDependencyDefaults();
+                    _hasDependencyDefaultChanges = false;
 
                     StatusMessage = $"Loaded mapping: {clientId}";
                     OnPropertyChanged(nameof(ClientId));
                     OnPropertyChanged(nameof(SenderDomain));
                     OnPropertyChanged(nameof(CanSave));
+                    OnPropertyChanged(nameof(CanDeployMapping));
+                    OnPropertyChanged(nameof(DeployTooltip));
                     OnPropertyChanged(nameof(MissingRequiredTagsMessage));
-                    _hasUnsavedChanges = false;
+                    SetUnsavedChanges(false);
+                    UpdateSenderDomainWarning();
                 }
             }
             catch (Exception ex)
@@ -354,7 +431,24 @@ namespace FixFlow.TradeAllocBridge.WPF.ViewModels
                 {
                     _currentMapping.SenderDomain = upper;
                     OnPropertyChanged(nameof(SenderDomain));
+                    OnPropertyChanged(nameof(CanDeployMapping));
+                    OnPropertyChanged(nameof(DeployTooltip));
+                    CommandManager.InvalidateRequerySuggested();
+                    UpdateSenderDomainWarning();
                     MarkDirty();
+                }
+            }
+        }
+
+        public string SenderDomainWarning
+        {
+            get => _senderDomainWarning;
+            private set
+            {
+                if (_senderDomainWarning != value)
+                {
+                    _senderDomainWarning = value;
+                    OnPropertyChanged(nameof(SenderDomainWarning));
                 }
             }
         }
@@ -449,10 +543,406 @@ namespace FixFlow.TradeAllocBridge.WPF.ViewModels
                     .Where(tag => !FieldMappings.Any(f => string.Equals(f.Value?.Trim(), tag, StringComparison.OrdinalIgnoreCase)))
                     .ToList();
 
+                var hasTag55 = FieldMappings.Any(f => string.Equals(f.Value?.Trim(), "55", StringComparison.OrdinalIgnoreCase));
+                var hasTag48 = FieldMappings.Any(f => string.Equals(f.Value?.Trim(), "48", StringComparison.OrdinalIgnoreCase));
+                if (!hasTag55 && !hasTag48)
+                {
+                    missing.Add("55 or 48");
+                }
+
                 return missing.Count == 0
                     ? string.Empty
                     : $"This map cannot be saved because it is missing the mapping for tag(s): {string.Join(", ", missing)}";
             }
+        }
+
+        public string DependencyWarningMessage
+        {
+            get => _dependencyWarningMessage;
+            private set
+            {
+                if (_dependencyWarningMessage != value)
+                {
+                    _dependencyWarningMessage = value;
+                    OnPropertyChanged(nameof(DependencyWarningMessage));
+                }
+            }
+        }
+
+        private void UpdateDependencyDefaults()
+        {
+            var anchor = NormalizeTagKey(NewFieldTag);
+            if (string.IsNullOrWhiteSpace(anchor))
+            {
+                ClearDependencyDefaults();
+                return;
+            }
+
+            if (!TagDependencies.TryGetValue(anchor, out var deps) || deps.Length == 0)
+            {
+                ClearDependencyDefaults();
+                return;
+            }
+
+            var normalized = deps
+                .Select(NormalizeTagKey)
+                .Where(tag => !string.IsNullOrWhiteSpace(tag))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            var missing = UseFieldDefaultsForAnchor
+                ? normalized
+                : normalized.Where(tag => !IsTagMapped(tag)).ToList();
+
+            if (missing.Count == 0)
+            {
+                ClearDependencyDefaults();
+                return;
+            }
+
+            DependencyWarningMessage = $"{GetTagDisplay(anchor)} requires: {string.Join(", ", missing.Select(GetTagDisplay))}. If dependent tag(s) are not explicitely mapped to column(s), you may set their default values below.";
+            SetDependencyDefaults(missing);
+        }
+
+        private void ClearDependencyDefaults()
+        {
+            DependencyWarningMessage = string.Empty;
+            if (DependencyDefaults.Count == 0)
+            {
+                return;
+            }
+
+            foreach (var item in DependencyDefaults)
+            {
+                item.PropertyChanged -= OnDependencyDefaultChanged;
+            }
+
+            DependencyDefaults.Clear();
+        }
+
+        private void SetDependencyDefaults(IReadOnlyList<string> tags)
+        {
+            var normalized = tags
+                .Select(NormalizeTagKey)
+                .Where(tag => !string.IsNullOrWhiteSpace(tag))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            for (var i = DependencyDefaults.Count - 1; i >= 0; i--)
+            {
+                if (!normalized.Contains(DependencyDefaults[i].Tag, StringComparer.OrdinalIgnoreCase))
+                {
+                    DependencyDefaults[i].PropertyChanged -= OnDependencyDefaultChanged;
+                    DependencyDefaults.RemoveAt(i);
+                }
+            }
+
+            foreach (var tag in normalized)
+            {
+                var existing = DependencyDefaults.FirstOrDefault(item =>
+                    string.Equals(item.Tag, tag, StringComparison.OrdinalIgnoreCase));
+
+                if (existing == null)
+                {
+                    var item = new DependencyDefaultItem(tag, GetTagDisplay(tag), GetDependencyDefaultValue(tag));
+                    item.PropertyChanged += OnDependencyDefaultChanged;
+                    DependencyDefaults.Add(item);
+                    continue;
+                }
+
+                existing.Display = GetTagDisplay(tag);
+                if (string.IsNullOrWhiteSpace(existing.DefaultValue))
+                {
+                    existing.DefaultValue = GetDependencyDefaultValue(tag);
+                }
+            }
+        }
+
+        private void OnDependencyDefaultChanged(object? sender, PropertyChangedEventArgs e)
+        {
+            if (sender is not DependencyDefaultItem item)
+            {
+                return;
+            }
+
+            if (e.PropertyName == nameof(DependencyDefaultItem.DefaultValue))
+            {
+                SetDependencyDefaultValue(item.Tag, item.DefaultValue);
+            }
+        }
+
+        private string GetDependencyDefaultValue(string tag)
+        {
+            if (UseFieldDefaultsForAnchor)
+            {
+                var perField = GetFieldDefaultTagValue(NewFieldName, tag);
+                if (!string.IsNullOrWhiteSpace(perField))
+                {
+                    return perField;
+                }
+            }
+
+            if (UseFieldDefaultsForAnchor && UseBlankDefaultsForAnchor)
+            {
+                return string.Empty;
+            }
+
+            return GetDefaultTagValue(tag);
+        }
+
+        private void SetDependencyDefaultValue(string tag, string? value)
+        {
+            if (UseFieldDefaultsForAnchor && !string.IsNullOrWhiteSpace(NewFieldName))
+            {
+                SetFieldDefaultTagValue(NewFieldName, tag, value);
+                if (SelectedFieldMapping.HasValue)
+                {
+                    _hasDependencyDefaultChanges = true;
+                    RefreshFieldCommands();
+                }
+                return;
+            }
+
+            SetDefaultTagValue(tag, value);
+            if (SelectedFieldMapping.HasValue)
+            {
+                _hasDependencyDefaultChanges = true;
+                RefreshFieldCommands();
+            }
+        }
+
+        private string GetDefaultTagValue(string tag)
+        {
+            var key = NormalizeTagKey(tag);
+            return _defaultTagValues.TryGetValue(key, out var value) ? value : string.Empty;
+        }
+
+        private void SetDefaultTagValue(string tag, string? value)
+        {
+            var key = NormalizeTagKey(tag);
+            if (string.IsNullOrWhiteSpace(key))
+            {
+                return;
+            }
+
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                if (_defaultTagValues.Remove(key))
+                {
+                    MarkDirty();
+                }
+                return;
+            }
+
+            _defaultTagValues[key] = value.Trim();
+            MarkDirty();
+        }
+
+        private bool UseFieldDefaultsForAnchor
+        {
+            get
+            {
+                var anchor = NormalizeTagKey(NewFieldTag);
+                return string.Equals(anchor, "137", StringComparison.OrdinalIgnoreCase) ||
+                       string.Equals(anchor, "139", StringComparison.OrdinalIgnoreCase);
+            }
+        }
+
+        private bool UseBlankDefaultsForAnchor =>
+            string.Equals(NormalizeTagKey(NewFieldTag), "137", StringComparison.OrdinalIgnoreCase);
+
+        private string? GetFieldDefaultTagValue(string? columnName, string tag)
+        {
+            var column = columnName?.Trim();
+            if (string.IsNullOrWhiteSpace(column))
+            {
+                return null;
+            }
+
+            if (!_fieldDefaultTagValues.TryGetValue(column, out var defaults))
+            {
+                return null;
+            }
+
+            var key = NormalizeTagKey(tag);
+            if (string.IsNullOrWhiteSpace(key))
+            {
+                return null;
+            }
+
+            if (defaults.TryGetValue(key, out var direct) && !string.IsNullOrWhiteSpace(direct))
+            {
+                return direct.Trim();
+            }
+
+            foreach (var kvp in defaults)
+            {
+                if (NormalizeTagKey(kvp.Key) == key && !string.IsNullOrWhiteSpace(kvp.Value))
+                {
+                    return kvp.Value.Trim();
+                }
+            }
+
+            return null;
+        }
+
+        private void SetFieldDefaultTagValue(string columnName, string tag, string? value)
+        {
+            var column = columnName?.Trim();
+            if (string.IsNullOrWhiteSpace(column))
+            {
+                return;
+            }
+
+            var key = NormalizeTagKey(tag);
+            if (string.IsNullOrWhiteSpace(key))
+            {
+                return;
+            }
+
+            if (!_fieldDefaultTagValues.TryGetValue(column, out var defaults))
+            {
+                defaults = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                _fieldDefaultTagValues[column] = defaults;
+            }
+
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                defaults.Remove(key);
+                if (defaults.Count == 0)
+                {
+                    _fieldDefaultTagValues.Remove(column);
+                }
+            }
+            else
+            {
+                defaults[key] = value.Trim();
+            }
+
+            MarkDirty();
+        }
+
+        private void SyncDefaultValuesWithMappings()
+        {
+            if (_defaultTagValues.Count == 0)
+            {
+                SyncFieldDefaultsWithMappings();
+                return;
+            }
+
+            var mapped = FieldMappings
+                .Select(entry => NormalizeTagKey(entry.Value))
+                .Where(tag => !string.IsNullOrWhiteSpace(tag))
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+            var toRemove = _defaultTagValues.Keys
+                .Where(tag => mapped.Contains(NormalizeTagKey(tag)))
+                .ToList();
+
+            foreach (var tag in toRemove)
+            {
+                _defaultTagValues.Remove(tag);
+            }
+
+            SyncFieldDefaultsWithMappings();
+        }
+
+        private void SyncFieldDefaultsWithMappings()
+        {
+            if (_fieldDefaultTagValues.Count == 0)
+            {
+                return;
+            }
+
+            var mappedColumns = FieldMappings
+                .Select(entry => entry.Key?.Trim())
+                .Where(name => !string.IsNullOrWhiteSpace(name))
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+            var toRemove = _fieldDefaultTagValues.Keys
+                .Where(column => !mappedColumns.Contains(column))
+                .ToList();
+
+            foreach (var column in toRemove)
+            {
+                _fieldDefaultTagValues.Remove(column);
+            }
+        }
+
+        private void RemoveFieldDefaultValues(string? columnName)
+        {
+            var column = columnName?.Trim();
+            if (string.IsNullOrWhiteSpace(column))
+            {
+                return;
+            }
+
+            _fieldDefaultTagValues.Remove(column);
+        }
+
+        private void MoveFieldDefaultValues(string? fromColumn, string? toColumn)
+        {
+            var from = fromColumn?.Trim();
+            var to = toColumn?.Trim();
+            if (string.IsNullOrWhiteSpace(from) || string.IsNullOrWhiteSpace(to))
+            {
+                return;
+            }
+
+            if (!_fieldDefaultTagValues.TryGetValue(from, out var existing))
+            {
+                return;
+            }
+
+            _fieldDefaultTagValues.Remove(from);
+            if (!_fieldDefaultTagValues.TryGetValue(to, out var target))
+            {
+                _fieldDefaultTagValues[to] = existing;
+                return;
+            }
+
+            foreach (var kvp in existing)
+            {
+                target[kvp.Key] = kvp.Value;
+            }
+        }
+
+        private bool IsTagMapped(string tag) =>
+            FieldMappings.Any(f => string.Equals(NormalizeTagKey(f.Value), tag, StringComparison.OrdinalIgnoreCase));
+
+        private static string NormalizeTagKey(string? tag)
+        {
+            if (string.IsNullOrWhiteSpace(tag))
+            {
+                return string.Empty;
+            }
+
+            if (FixValueNormalizer.TryParseTagNumber(tag, out var parsed))
+            {
+                return parsed.ToString(CultureInfo.InvariantCulture);
+            }
+
+            var digits = new string(tag.Trim().Where(char.IsDigit).ToArray());
+            return digits;
+        }
+
+        private string GetTagDisplay(string tag)
+        {
+            var trimmed = NormalizeTagKey(tag);
+            if (string.IsNullOrWhiteSpace(trimmed))
+            {
+                return "Tag";
+            }
+
+            var option = _fixFieldOptions.FirstOrDefault(field =>
+                string.Equals(field.Tag, trimmed, StringComparison.OrdinalIgnoreCase));
+
+            if (option != null && !string.IsNullOrWhiteSpace(option.Name))
+            {
+                return $"Tag {trimmed} ({option.Name})";
+            }
+
+            return $"Tag {trimmed}";
         }
 
         public string IncomingFolderPath
@@ -477,6 +967,19 @@ namespace FixFlow.TradeAllocBridge.WPF.ViewModels
                 {
                     _dateCreated = value;
                     OnPropertyChanged(nameof(DateCreated));
+                }
+            }
+        }
+
+        public string DateValidated
+        {
+            get => _dateValidated;
+            set
+            {
+                if (_dateValidated != value)
+                {
+                    _dateValidated = value;
+                    OnPropertyChanged(nameof(DateValidated));
                 }
             }
         }
@@ -517,6 +1020,7 @@ namespace FixFlow.TradeAllocBridge.WPF.ViewModels
                     _newFieldName = value;
                     OnPropertyChanged(nameof(NewFieldName));
                     RefreshFieldCommands();
+                    UpdateDependencyDefaults();
                 }
             }
         }
@@ -531,6 +1035,7 @@ namespace FixFlow.TradeAllocBridge.WPF.ViewModels
                     _newFieldTag = value;
                     OnPropertyChanged(nameof(NewFieldTag));
                     RefreshFieldCommands();
+                    UpdateDependencyDefaults();
                 }
             }
         }
@@ -606,6 +1111,7 @@ namespace FixFlow.TradeAllocBridge.WPF.ViewModels
                     NewFieldTag = value.Value.Value;
                     NewFieldTagInput = value.Value.Value;
                 }
+                _hasDependencyDefaultChanges = false;
                 OnPropertyChanged(nameof(SelectedFieldMapping));
                 RefreshFieldCommands();
             }
@@ -618,17 +1124,25 @@ namespace FixFlow.TradeAllocBridge.WPF.ViewModels
             {
                 if (_isEditing != value)
                 {
-                    _isEditing = value;
-                    OnPropertyChanged(nameof(IsEditing));
-                    OnPropertyChanged(nameof(ShowMappingDetails));
-                    OnPropertyChanged(nameof(CanValidateMapping));
-                    OnPropertyChanged(nameof(CanSave));
-                    RefreshFieldCommands();
-                }
+                _isEditing = value;
+                OnPropertyChanged(nameof(IsEditing));
+                OnPropertyChanged(nameof(ShowMappingDetails));
+                OnPropertyChanged(nameof(CanValidateMapping));
+                OnPropertyChanged(nameof(CanSave));
+                OnPropertyChanged(nameof(CanDeployMapping));
+                OnPropertyChanged(nameof(DeployTooltip));
+                RefreshFieldCommands();
+                UpdateSenderDomainWarning();
             }
         }
+    }
 
         public bool CanValidateMapping => !IsEditing && SelectedMapping != null;
+        public bool CanDeployMapping => !IsEditing && SelectedMapping != null && !string.IsNullOrWhiteSpace(SenderDomain);
+        public string DeployTooltip =>
+            !IsEditing && SelectedMapping != null && string.IsNullOrWhiteSpace(SenderDomain)
+                ? "Enter a sender domain to enable email automation"
+                : string.Empty;
 
         public event Action<string>? ValidateRequested;
 
@@ -661,7 +1175,8 @@ namespace FixFlow.TradeAllocBridge.WPF.ViewModels
             }
         }
 
-        public bool CanUpdateField => IsEditing && SelectedFieldMapping.HasValue && IsFieldDirty && !string.IsNullOrWhiteSpace(NewFieldName) && !string.IsNullOrWhiteSpace(NewFieldTag);
+        public bool CanUpdateField => IsEditing && SelectedFieldMapping.HasValue && (IsFieldDirty || _hasDependencyDefaultChanges) &&
+                                      !string.IsNullOrWhiteSpace(NewFieldName) && !string.IsNullOrWhiteSpace(NewFieldTag);
         public bool CanAddField
         {
             get
@@ -748,6 +1263,7 @@ namespace FixFlow.TradeAllocBridge.WPF.ViewModels
 
             IsFixFieldSuggestionOpen = FixFieldSuggestions.Count > 0;
             RefreshFieldCommands();
+            UpdateDependencyDefaults();
         }
 
         private List<FixFieldOption> LoadFixFieldOptions()
@@ -865,9 +1381,11 @@ namespace FixFlow.TradeAllocBridge.WPF.ViewModels
         }
 
         private bool HasRequiredTags => RequiredFixTags.All(tag =>
-            FieldMappings.Any(f => string.Equals(f.Value?.Trim(), tag, StringComparison.OrdinalIgnoreCase)));
+            FieldMappings.Any(f => string.Equals(f.Value?.Trim(), tag, StringComparison.OrdinalIgnoreCase)))
+            && (FieldMappings.Any(f => string.Equals(f.Value?.Trim(), "55", StringComparison.OrdinalIgnoreCase))
+                || FieldMappings.Any(f => string.Equals(f.Value?.Trim(), "48", StringComparison.OrdinalIgnoreCase)));
 
-        public bool CanSave => IsEditing && !string.IsNullOrWhiteSpace(ClientId) && FieldMappings.Count > 0 && HasRequiredTags;
+        public bool CanSave => IsEditing && _hasUnsavedChanges && !string.IsNullOrWhiteSpace(ClientId) && FieldMappings.Count > 0 && HasRequiredTags;
 
         public bool CanMoveFieldUp => IsEditing && GetSelectedFieldIndex() > 0;
         public bool CanMoveFieldDown => IsEditing && GetSelectedFieldIndex() >= 0 && GetSelectedFieldIndex() < FieldMappings.Count - 1;
@@ -948,6 +1466,10 @@ namespace FixFlow.TradeAllocBridge.WPF.ViewModels
             NewFieldName = string.Empty;
             NewFieldTag = string.Empty;
             NewFieldTagInput = string.Empty;
+            _defaultTagValues.Clear();
+            _fieldDefaultTagValues.Clear();
+            ClearDependencyDefaults();
+            _hasDependencyDefaultChanges = false;
             OnPropertyChanged(nameof(CanSave));
             CommandManager.InvalidateRequerySuggested();
             OnPropertyChanged(nameof(ClientId));
@@ -957,7 +1479,8 @@ namespace FixFlow.TradeAllocBridge.WPF.ViewModels
 
             IsEditing = true;
             _suppressChangeTracking = false;
-            _hasUnsavedChanges = true;
+            SetUnsavedChanges(true);
+            DateValidated = string.Empty;
             StatusMessage = "Creating new mapping...";
         }
 
@@ -1075,7 +1598,7 @@ namespace FixFlow.TradeAllocBridge.WPF.ViewModels
                         LoadMappingDetails(targetClientId);
                         _suppressChangeTracking = false;
                         IsEditing = true;
-                        _hasUnsavedChanges = false;
+                        SetUnsavedChanges(false);
                         StatusMessage = $"Editing: {targetClientId}";
                         return;
                     }
@@ -1091,7 +1614,7 @@ namespace FixFlow.TradeAllocBridge.WPF.ViewModels
             }
 
             IsEditing = true;
-            _hasUnsavedChanges = false;
+            SetUnsavedChanges(false);
             StatusMessage = $"Editing: {targetClientId}";
         }
 
@@ -1127,17 +1650,39 @@ namespace FixFlow.TradeAllocBridge.WPF.ViewModels
                     return;
                 }
 
+                var senderDomain = SenderDomain?.Trim().ToUpperInvariant() ?? string.Empty;
+                if (!string.IsNullOrWhiteSpace(senderDomain))
+                {
+                    var conflict = _mappingRepo
+                        .GetAll()
+                        .FirstOrDefault(m =>
+                            !string.IsNullOrWhiteSpace(m.SenderDomain) &&
+                            string.Equals(m.SenderDomain.Trim(), senderDomain, StringComparison.OrdinalIgnoreCase) &&
+                            !string.Equals(m.ClientId, ClientId, StringComparison.OrdinalIgnoreCase) &&
+                            !string.Equals(m.ClientId, SelectedMapping, StringComparison.OrdinalIgnoreCase));
+
+                    if (conflict != null)
+                    {
+                        StatusMessage = $"Sender domain {senderDomain} is already used by mapping {conflict.ClientId}.";
+                        return;
+                    }
+                }
+
                 if (!HasRequiredTags)
                 {
-                    StatusMessage = "Missing required FIX fields. Please map tags 54, 55, 79, 80, and 153 before saving.";
+                    StatusMessage = "Missing required FIX fields. Please map tags 54, 79, 80, 153, and either 55 or 48 before saving.";
                     return;
                 }
 
                 // Update model
                 _currentMapping.ClientId = ClientId;
-                _currentMapping.SenderDomain = SenderDomain;
+                _currentMapping.SenderDomain = senderDomain;
+                _currentMapping.DateValidated = null;
+                DateValidated = string.Empty;
                 _currentMapping.Predefined ??= new PredefinedFields();
+                var clientQualifier = NormalizeQualifier(ResolveSessionQualifier("Client", "FixFlowClient"));
                 _currentMapping.Predefined.SenderCompID = SenderCompId;
+                _currentMapping.Predefined.SenderSubID = string.IsNullOrWhiteSpace(clientQualifier) ? null : clientQualifier;
                 _currentMapping.Predefined.TargetCompID = string.IsNullOrWhiteSpace(TargetCompId) ? "BROKER" : TargetCompId;
                 _currentMapping.Predefined.TargetSubID = string.IsNullOrWhiteSpace(TargetSubId) ? null : TargetSubId;
                 _currentMapping.Predefined.OnBehalfOfCompID = string.IsNullOrWhiteSpace(OnBehalfOfCompId) ? null : OnBehalfOfCompId;
@@ -1151,6 +1696,45 @@ namespace FixFlow.TradeAllocBridge.WPF.ViewModels
                     if (!string.IsNullOrEmpty(header) && !string.IsNullOrEmpty(tag))
                     {
                         _currentMapping.TradeAllocations[header] = tag;
+                    }
+                }
+                SyncDefaultValuesWithMappings();
+                _currentMapping.DefaultTagValues ??= new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                _currentMapping.DefaultTagValues.Clear();
+                foreach (var kvp in _defaultTagValues)
+                {
+                    if (!string.IsNullOrWhiteSpace(kvp.Key) && !string.IsNullOrWhiteSpace(kvp.Value))
+                    {
+                        _currentMapping.DefaultTagValues[kvp.Key] = kvp.Value;
+                    }
+                }
+
+                _currentMapping.FieldDefaultTagValues ??= new Dictionary<string, Dictionary<string, string>>(StringComparer.OrdinalIgnoreCase);
+                _currentMapping.FieldDefaultTagValues.Clear();
+                foreach (var columnEntry in _fieldDefaultTagValues)
+                {
+                    var column = columnEntry.Key?.Trim();
+                    if (string.IsNullOrWhiteSpace(column))
+                    {
+                        continue;
+                    }
+
+                    var tagDefaults = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                    foreach (var tagEntry in columnEntry.Value)
+                    {
+                        var tag = NormalizeTagKey(tagEntry.Key);
+                        var value = tagEntry.Value?.Trim() ?? string.Empty;
+                        if (string.IsNullOrWhiteSpace(tag) || string.IsNullOrWhiteSpace(value))
+                        {
+                            continue;
+                        }
+
+                        tagDefaults[tag] = value;
+                    }
+
+                    if (tagDefaults.Count > 0)
+                    {
+                        _currentMapping.FieldDefaultTagValues[column] = tagDefaults;
                     }
                 }
 
@@ -1170,7 +1754,8 @@ namespace FixFlow.TradeAllocBridge.WPF.ViewModels
                 UpdateSessionConfigFiles(_currentMapping);
 
                 IsEditing = false;
-                _hasUnsavedChanges = false;
+                SetUnsavedChanges(false);
+                _hasDependencyDefaultChanges = false;
                 LoadAvailableMappings();
                 SelectedMapping = ClientId;
 
@@ -1237,7 +1822,7 @@ namespace FixFlow.TradeAllocBridge.WPF.ViewModels
 
                 LoadAvailableMappings();
                 SelectedMapping = null;
-                _hasUnsavedChanges = false;
+                SetUnsavedChanges(false);
                 StatusMessage = deleteDeployed
                     ? $"Mapping and deployed copy deleted: {clientId}"
                     : $"Mapping deleted: {clientId}";
@@ -1450,7 +2035,19 @@ namespace FixFlow.TradeAllocBridge.WPF.ViewModels
                 return;
             }
 
-            _hasUnsavedChanges = true;
+            SetUnsavedChanges(true);
+        }
+
+        private void SetUnsavedChanges(bool hasChanges)
+        {
+            if (_hasUnsavedChanges == hasChanges)
+            {
+                return;
+            }
+
+            _hasUnsavedChanges = hasChanges;
+            OnPropertyChanged(nameof(CanSave));
+            CommandManager.InvalidateRequerySuggested();
         }
 
         private void AddField()
@@ -1472,6 +2069,9 @@ namespace FixFlow.TradeAllocBridge.WPF.ViewModels
             NewFieldName = string.Empty;
             NewFieldTag = string.Empty;
             NewFieldTagInput = string.Empty;
+            _hasDependencyDefaultChanges = false;
+            SyncDefaultValuesWithMappings();
+            UpdateDependencyDefaults();
             OnPropertyChanged(nameof(CanSave));
             OnPropertyChanged(nameof(MissingRequiredTagsMessage));
             MarkDirty();
@@ -1503,11 +2103,23 @@ namespace FixFlow.TradeAllocBridge.WPF.ViewModels
             var index = FieldMappings.IndexOf(SelectedFieldMapping.Value);
             if (index >= 0)
             {
+                var previousColumn = SelectedFieldMapping.Value.Key;
                 var updated = new KeyValuePair<string, string>(NewFieldName.Trim(), NewFieldTag.Trim());
-                FieldMappings[index] = updated;
+                var hasFieldChanges = IsFieldDirty;
+                if (hasFieldChanges)
+                {
+                    FieldMappings[index] = updated;
+                }
                 SelectedFieldMapping = updated;
                 NewFieldTagInput = NewFieldTag;
-                StatusMessage = "✅ Field updated";
+                StatusMessage = hasFieldChanges ? "✅ Field updated" : "✅ Field defaults updated";
+                if (!string.Equals(previousColumn, updated.Key, StringComparison.OrdinalIgnoreCase))
+                {
+                    MoveFieldDefaultValues(previousColumn, updated.Key);
+                }
+                _hasDependencyDefaultChanges = false;
+                SyncDefaultValuesWithMappings();
+                UpdateDependencyDefaults();
                 OnPropertyChanged(nameof(CanSave));
                 OnPropertyChanged(nameof(MissingRequiredTagsMessage));
                 MarkDirty();
@@ -1518,8 +2130,13 @@ namespace FixFlow.TradeAllocBridge.WPF.ViewModels
         {
             if (SelectedFieldMapping == null) return;
 
+            var column = SelectedFieldMapping.Value.Key;
             FieldMappings.Remove(SelectedFieldMapping.Value);
             SelectedFieldMapping = null;
+            RemoveFieldDefaultValues(column);
+            _hasDependencyDefaultChanges = false;
+            SyncDefaultValuesWithMappings();
+            UpdateDependencyDefaults();
             OnPropertyChanged(nameof(CanSave));
             OnPropertyChanged(nameof(MissingRequiredTagsMessage));
             MarkDirty();
@@ -1563,7 +2180,14 @@ namespace FixFlow.TradeAllocBridge.WPF.ViewModels
                     StatusMessage = "Invalid mapping configuration";
                     return;
                 }
-
+                if (string.IsNullOrWhiteSpace(testMapping.SenderDomain))
+                {
+                    StatusMessage = "Enter a sender domain to enable email automation.";
+                    return;
+                }
+                var serviceQualifier = NormalizeQualifier(ResolveSessionQualifier("Service", "FixFlowService"));
+                testMapping.Predefined ??= new PredefinedFields();
+                testMapping.Predefined.SenderSubID = string.IsNullOrWhiteSpace(serviceQualifier) ? null : serviceQualifier;
                 // Destination: staging/incoming folder inside the CLI configs folder
                 var incomingDir = Path.Combine(_cliConfigsDir, "incoming");
                 Directory.CreateDirectory(incomingDir);
@@ -1571,12 +2195,13 @@ namespace FixFlow.TradeAllocBridge.WPF.ViewModels
                 var incomingPath = Path.Combine(incomingDir, filename);
                 var tempFile = Path.Combine(incomingDir, $"{filename}.{Guid.NewGuid():N}.tmp");
 
-                // Copy via a temp file in the incoming folder to avoid writing directly into the CLI's active file.
-                using (var srcStream = new FileStream(sourcePath, FileMode.Open, FileAccess.Read, FileShare.Read))
-                using (var destStream = new FileStream(tempFile, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+                // Write via a temp file in the incoming folder to avoid writing directly into the CLI's active file.
+                var json = JsonSerializer.Serialize(testMapping, new JsonSerializerOptions
                 {
-                    srcStream.CopyTo(destStream);
-                }
+                    WriteIndented = true,
+                    PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+                });
+                File.WriteAllText(tempFile, json);
 
                 // Try to atomically move/replace the temp file into the incoming filename.
                 var deployed = false;
@@ -1646,6 +2271,8 @@ namespace FixFlow.TradeAllocBridge.WPF.ViewModels
         {
             var senderCompId = mapping.Predefined?.SenderCompID ?? mapping.ClientId ?? string.Empty;
             var targetCompId = mapping.Predefined?.TargetCompID ?? "EXECUTOR";
+            var senderSubId = NormalizeQualifier(mapping.Predefined?.SenderSubID);
+            var targetSubId = NormalizeQualifier(mapping.Predefined?.TargetSubID);
 
             if (string.IsNullOrWhiteSpace(senderCompId) || string.IsNullOrWhiteSpace(targetCompId))
             {
@@ -1658,7 +2285,10 @@ namespace FixFlow.TradeAllocBridge.WPF.ViewModels
             TrySyncSessionSection(
                 wpfFixCfgPath,
                 senderCompId,
-                BuildWpfSessionLines(senderCompId, targetCompId),
+                targetCompId,
+                senderSubId,
+                targetSubId,
+                BuildWpfSessionLines(senderCompId, targetCompId, senderSubId, targetSubId),
                 remove: false);
 
             if (!string.IsNullOrWhiteSpace(executorCfgPath))
@@ -1666,7 +2296,10 @@ namespace FixFlow.TradeAllocBridge.WPF.ViewModels
                 TrySyncSessionSection(
                     executorCfgPath,
                     targetCompId,
-                    BuildExecutorSessionLines(targetCompId, senderCompId),
+                    senderCompId,
+                    targetSubId,
+                    senderSubId,
+                    BuildExecutorSessionLines(targetCompId, senderCompId, targetSubId, senderSubId),
                     remove: false);
             }
         }
@@ -1675,6 +2308,8 @@ namespace FixFlow.TradeAllocBridge.WPF.ViewModels
         {
             var senderCompId = mapping.Predefined?.SenderCompID ?? mapping.ClientId ?? string.Empty;
             var targetCompId = mapping.Predefined?.TargetCompID ?? "EXECUTOR";
+            var senderSubId = NormalizeQualifier(mapping.Predefined?.SenderSubID);
+            var targetSubId = NormalizeQualifier(mapping.Predefined?.TargetSubID);
 
             if (string.IsNullOrWhiteSpace(senderCompId) || string.IsNullOrWhiteSpace(targetCompId))
             {
@@ -1691,7 +2326,10 @@ namespace FixFlow.TradeAllocBridge.WPF.ViewModels
             TrySyncSessionSection(
                 cliFixCfgPath,
                 senderCompId,
-                BuildWpfSessionLines(senderCompId, targetCompId),
+                targetCompId,
+                senderSubId,
+                targetSubId,
+                BuildWpfSessionLines(senderCompId, targetCompId, senderSubId, targetSubId),
                 remove: false);
         }
 
@@ -1702,6 +2340,8 @@ namespace FixFlow.TradeAllocBridge.WPF.ViewModels
                 ?? clientId
                 ?? string.Empty;
             var targetCompId = mapping.Predefined?.TargetCompID ?? "EXECUTOR";
+            var senderSubId = NormalizeQualifier(mapping.Predefined?.SenderSubID);
+            var targetSubId = NormalizeQualifier(mapping.Predefined?.TargetSubID);
 
             if (string.IsNullOrWhiteSpace(senderCompId))
             {
@@ -1714,7 +2354,10 @@ namespace FixFlow.TradeAllocBridge.WPF.ViewModels
             TrySyncSessionSection(
                 wpfFixCfgPath,
                 senderCompId,
-                BuildWpfSessionLines(senderCompId, targetCompId),
+                targetCompId,
+                senderSubId,
+                targetSubId,
+                BuildWpfSessionLines(senderCompId, targetCompId, senderSubId, targetSubId),
                 remove: true);
 
             if (!string.IsNullOrWhiteSpace(executorCfgPath))
@@ -1722,7 +2365,10 @@ namespace FixFlow.TradeAllocBridge.WPF.ViewModels
                 TrySyncSessionSection(
                     executorCfgPath,
                     targetCompId,
-                    BuildExecutorSessionLines(targetCompId, senderCompId),
+                    senderCompId,
+                    targetSubId,
+                    senderSubId,
+                    BuildExecutorSessionLines(targetCompId, senderCompId, targetSubId, senderSubId),
                     remove: true);
             }
         }
@@ -1748,6 +2394,9 @@ namespace FixFlow.TradeAllocBridge.WPF.ViewModels
         private bool TrySyncSessionSection(
             string configPath,
             string senderCompId,
+            string targetCompId,
+            string? senderSubId,
+            string? targetSubId,
             List<string> sessionLines,
             bool remove)
         {
@@ -1759,7 +2408,15 @@ namespace FixFlow.TradeAllocBridge.WPF.ViewModels
 
             try
             {
-                var updated = SyncSessionSection(configPath, senderCompId, sessionLines, remove, out var updatedLines);
+                var updated = SyncSessionSection(
+                    configPath,
+                    senderCompId,
+                    targetCompId,
+                    senderSubId,
+                    targetSubId,
+                    sessionLines,
+                    remove,
+                    out var updatedLines);
                 if (updated)
                 {
                     File.WriteAllLines(configPath, updatedLines);
@@ -1782,6 +2439,9 @@ namespace FixFlow.TradeAllocBridge.WPF.ViewModels
         private static bool SyncSessionSection(
             string configPath,
             string senderCompId,
+            string targetCompId,
+            string? senderSubId,
+            string? targetSubId,
             List<string> sessionLines,
             bool remove,
             out List<string> updatedLines)
@@ -1843,9 +2503,15 @@ namespace FixFlow.TradeAllocBridge.WPF.ViewModels
                 }
 
                 var existingSender = GetConfigValue(section.Lines, "SenderCompID");
+                var existingTarget = GetConfigValue(section.Lines, "TargetCompID");
+                var existingSenderSub = GetConfigValue(section.Lines, "SenderSubID");
+                var existingTargetSub = GetConfigValue(section.Lines, "TargetSubID");
                 var existingBeginString = GetConfigValue(section.Lines, "BeginString");
 
                 if (!string.Equals(existingSender, senderCompId, StringComparison.OrdinalIgnoreCase) ||
+                    !string.Equals(existingTarget, targetCompId, StringComparison.OrdinalIgnoreCase) ||
+                    !MatchesOptional(existingSenderSub, senderSubId) ||
+                    !MatchesOptional(existingTargetSub, targetSubId) ||
                     (!string.IsNullOrWhiteSpace(existingBeginString) &&
                      !string.Equals(existingBeginString, desiredBeginString, StringComparison.OrdinalIgnoreCase)))
                 {
@@ -1910,20 +2576,32 @@ namespace FixFlow.TradeAllocBridge.WPF.ViewModels
             return null;
         }
 
-        private static List<string> BuildWpfSessionLines(string senderCompId, string targetCompId)
+        private static List<string> BuildWpfSessionLines(string senderCompId, string targetCompId, string? senderSubId, string? targetSubId)
         {
-            return new List<string>
+            var lines = new List<string>
             {
                 "BeginString=FIX.4.2",
                 "FileStorePath=store",
                 $"SenderCompID={senderCompId}",
                 $"TargetCompID={targetCompId}"
             };
+
+            if (!string.IsNullOrWhiteSpace(senderSubId))
+            {
+                lines.Add($"SenderSubID={senderSubId}");
+            }
+
+            if (!string.IsNullOrWhiteSpace(targetSubId))
+            {
+                lines.Add($"TargetSubID={targetSubId}");
+            }
+
+            return lines;
         }
 
-        private static List<string> BuildExecutorSessionLines(string senderCompId, string targetCompId)
+        private static List<string> BuildExecutorSessionLines(string senderCompId, string targetCompId, string? senderSubId, string? targetSubId)
         {
-            return new List<string>
+            var lines = new List<string>
             {
                 "BeginString=FIX.4.2",
                 $"SenderCompID={senderCompId}",
@@ -1931,6 +2609,18 @@ namespace FixFlow.TradeAllocBridge.WPF.ViewModels
                 "FileStorePath=store",
                 "DataDictionary=../../spec/fix/FIX42.xml"
             };
+
+            if (!string.IsNullOrWhiteSpace(senderSubId))
+            {
+                lines.Add($"SenderSubID={senderSubId}");
+            }
+
+            if (!string.IsNullOrWhiteSpace(targetSubId))
+            {
+                lines.Add($"TargetSubID={targetSubId}");
+            }
+
+            return lines;
         }
 
         private string? ResolveCliFixCfgPath()
@@ -2059,8 +2749,23 @@ namespace FixFlow.TradeAllocBridge.WPF.ViewModels
             try
             {
                 var env = Environment.GetEnvironmentVariable(envVar);
-                if (!string.IsNullOrWhiteSpace(env) && Directory.Exists(env))
-                    return Path.GetFullPath(env);
+                if (!string.IsNullOrWhiteSpace(env))
+                {
+                    var candidate = env;
+                    if (!Path.IsPathRooted(candidate))
+                    {
+                        candidate = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, candidate));
+                    }
+                    else
+                    {
+                        candidate = Path.GetFullPath(candidate);
+                    }
+
+                    if (Directory.Exists(candidate))
+                    {
+                        return candidate;
+                    }
+                }
             }
             catch { /* ignore and continue */ }
 
@@ -2166,6 +2871,67 @@ namespace FixFlow.TradeAllocBridge.WPF.ViewModels
             }
         }
 
+        private static string NormalizeUpper(string? value)
+        {
+            return string.IsNullOrWhiteSpace(value) ? string.Empty : value.Trim().ToUpperInvariant();
+        }
+
+        private static string? NormalizeQualifier(string? value)
+        {
+            return string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+        }
+
+        private string ResolveSessionQualifier(string key, string fallback)
+        {
+            var value = _configuration[$"FixSessionQualifiers:{key}"];
+            return string.IsNullOrWhiteSpace(value) ? fallback : value.Trim();
+        }
+
+        private static bool MatchesOptional(string? existingValue, string? desiredValue)
+        {
+            if (string.IsNullOrWhiteSpace(desiredValue))
+            {
+                return string.IsNullOrWhiteSpace(existingValue);
+            }
+
+            return string.Equals(existingValue?.Trim(), desiredValue.Trim(), StringComparison.OrdinalIgnoreCase);
+        }
+
+        private void UpdateSenderDomainWarning()
+        {
+            if (!IsEditing)
+            {
+                SenderDomainWarning = string.Empty;
+                return;
+            }
+
+            var senderDomain = NormalizeUpper(SenderDomain);
+            if (string.IsNullOrWhiteSpace(senderDomain))
+            {
+                SenderDomainWarning = string.Empty;
+                return;
+            }
+
+            try
+            {
+                var conflict = _mappingRepo
+                    .GetAll()
+                    .FirstOrDefault(m =>
+                        !string.IsNullOrWhiteSpace(m.SenderDomain) &&
+                        string.Equals(NormalizeUpper(m.SenderDomain), senderDomain, StringComparison.OrdinalIgnoreCase) &&
+                        !string.Equals(m.ClientId, ClientId, StringComparison.OrdinalIgnoreCase) &&
+                        !string.Equals(m.ClientId, SelectedMapping, StringComparison.OrdinalIgnoreCase));
+
+                SenderDomainWarning = conflict != null
+                    ? $"Sender domain already used by {conflict.ClientId}."
+                    : string.Empty;
+            }
+            catch
+            {
+                SenderDomainWarning = string.Empty;
+            }
+        }
+
         private static string? FindAncestorWithFile(string startPath, string searchPattern, int maxLevels)
         {
             try
@@ -2207,6 +2973,50 @@ namespace FixFlow.TradeAllocBridge.WPF.ViewModels
         public string Tag { get; }
         public string Display => $"{Name} ({Tag})";
     }
+
+    public sealed class DependencyDefaultItem : INotifyPropertyChanged
+    {
+        private string _display;
+        private string _defaultValue;
+
+        public DependencyDefaultItem(string tag, string display, string defaultValue)
+        {
+            Tag = tag;
+            _display = display;
+            _defaultValue = defaultValue;
+        }
+
+        public string Tag { get; }
+
+        public string Display
+        {
+            get => _display;
+            set
+            {
+                if (_display != value)
+                {
+                    _display = value;
+                    PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Display)));
+                }
+            }
+        }
+
+        public string DefaultValue
+        {
+            get => _defaultValue;
+            set
+            {
+                if (_defaultValue != value)
+                {
+                    _defaultValue = value;
+                    PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(DefaultValue)));
+                }
+            }
+        }
+
+        public event PropertyChangedEventHandler? PropertyChanged;
+    }
 }
+
 
 

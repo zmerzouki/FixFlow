@@ -1,0 +1,717 @@
+@page "/fix-dictionary"
+@inject HttpClient Http
+@inject IJSRuntime JS
+
+<PageTitle>FIX Dictionary</PageTitle>
+
+<section class="page-header">
+    <div>
+        <h1>FIX Dictionary</h1>
+        <p>Search FIX tags, required flags, enumerations and messages.</p>
+    </div>
+</section>
+
+<section class="card fix-dict-card">
+    <div class="section-title">FIX Field Search</div>
+    <div class="fix-dict-grid">
+        <div class="form-row">
+            <label>Select Dictionary</label>
+            <select class="text-input"
+                    @bind="_selectedDictionaryKey"
+                    @bind:after="OnDictionaryChanged"
+                    disabled="@(!_dictionaryOptions.Any())">
+                @foreach (var option in _dictionaryOptions)
+                {
+                    <option value="@option.Key">@option.Display</option>
+                }
+            </select>
+        </div>
+        <div class="form-row fix-suggest">
+            <label title="Type a few characters for suggestions, or '-' to show all header tags. Leave blank to show all messages where the selected tag is defined.">Message Name</label>
+            <input class="text-input"
+                   value="@_messageInput"
+                   @oninput="OnMessageInput"
+                   @onkeydown="OnMessageKeyDown"
+                   title="Type a few characters for suggestions, or '-' to show all header tags. Leave blank to show all messages where the selected tag is defined."
+                   placeholder="Start typing a message name"
+                   disabled="@(!_hasDictionary)" />
+            @if (_isMessageSuggestionOpen)
+            {
+                <div class="fix-suggest-list">
+                    @for (var i = 0; i < _messageSuggestions.Count; i++)
+                    {
+                        var suggestion = _messageSuggestions[i];
+                        <button type="button"
+                                class="fix-suggest-item @(i == _messageSuggestionIndex ? "is-active" : string.Empty)"
+                                @onclick="() => CommitMessageSuggestion(suggestion)">
+                            @suggestion.Display
+                        </button>
+                    }
+                </div>
+            }
+        </div>
+        <div class="form-row fix-suggest">
+            <label title="Type a few characters for suggestions, a tag number, or '*' to show all tags for the selected message.">Tag Number or Name</label>
+            <input class="text-input"
+                   value="@_tagInput"
+                   @oninput="OnTagInput"
+                   @onkeydown="OnTagKeyDown"
+                   title="Tip: Type '*' to show all tags for the selected message."
+                   placeholder="Type tag number or a few characters for suggestions"
+                   disabled="@(!_hasDictionary)" />
+            @if (_isTagSuggestionOpen)
+            {
+                <div class="fix-suggest-list">
+                    @for (var i = 0; i < _tagSuggestions.Count; i++)
+                    {
+                        var suggestion = _tagSuggestions[i];
+                        <button type="button"
+                                class="fix-suggest-item @(i == _tagSuggestionIndex ? "is-active" : string.Empty)"
+                                @onclick="() => CommitTagSuggestion(suggestion)">
+                            @suggestion.Display
+                        </button>
+                    }
+                </div>
+            }
+        </div>
+    </div>
+    <div class="fix-status">@_statusMessage</div>
+</section>
+
+<section class="card">
+    <div class="fix-result-title">Result</div>
+    @if (_tagResults.Count > 1)
+    {
+        <div class="fix-result-count">@_tagResults.Count tag(s) found.</div>
+    }
+    @if (_tagResults.Count > 0)
+    {
+        if (ShowSingleResultDetails)
+        {
+            var single = SingleResult!;
+            <div class="table">
+                <div class="table-header">
+                    <span>Tag</span>
+                    <span>Name</span>
+                    <span>Type</span>
+                    <span>Required</span>
+                </div>
+                <div class="table-row">
+                    <span class="fix-tag-cell">
+                        @if (single.Depth > 0)
+                        {
+                            <span class="fix-tag-indent" style="--tag-depth:@single.Depth">
+                                @for (var i = 0; i < single.Depth; i++)
+                                {
+                                    <span class="fix-tag-arrow" aria-hidden="true">&#8594;</span>
+                                }
+                            </span>
+                        }
+                        <span class="fix-tag-number">@single.Tag</span>
+                    </span>
+                    <span>@single.Name</span>
+                    <span>@single.Type</span>
+                    <span>@(single.IsRequired.HasValue ? (single.IsRequired.Value ? "Yes" : "No") : "-")</span>
+                </div>
+
+                @if (SingleEnumResults.Count > 0 || SingleMessageResults.Count > 0)
+                {
+                    <div class="table-row details fix-detail-box">
+                        @if (SingleEnumResults.Count > 0)
+                        {
+                            <div class="fix-detail-block">
+                                <div class="fix-detail-label">Valid Enumeration:</div>
+                                <div class="fix-detail-list">
+                                    @foreach (var item in SingleEnumResults)
+                                    {
+                                        <div>@item</div>
+                                    }
+                                </div>
+                            </div>
+                        }
+                        @if (SingleMessageResults.Count > 0)
+                        {
+                            <div class="fix-detail-block">
+                                <div class="fix-detail-label">Messages using this tag:</div>
+                                <div class="fix-detail-list">
+                                    @foreach (var item in SingleMessageResults)
+                                    {
+                                        <div>@item</div>
+                                    }
+                                </div>
+                            </div>
+                        }
+                    </div>
+                }
+            </div>
+        }
+        else
+        {
+            <div class="table">
+            <div class="table-header">
+                <button type="button"
+                        class="table-sort @(IsSortActive("tag") ? "is-active" : string.Empty)"
+                        @onclick='() => ToggleSort("tag")'>
+                    Tag <span class="table-sort-indicator">@SortIndicator("tag")</span>
+                </button>
+                <button type="button"
+                        class="table-sort @(IsSortActive("name") ? "is-active" : string.Empty)"
+                        @onclick='() => ToggleSort("name")'>
+                    Name <span class="table-sort-indicator">@SortIndicator("name")</span>
+                </button>
+                <span>Type</span>
+                <span>Required</span>
+            </div>
+            @foreach (var tag in _tagResults)
+            {
+                <div class="table-row">
+                    <span class="fix-tag-cell">
+                        @if (tag.Depth > 0)
+                        {
+                            <span class="fix-tag-indent" style="--tag-depth:@tag.Depth">
+                                @for (var i = 0; i < tag.Depth; i++)
+                                {
+                                    <span class="fix-tag-arrow" aria-hidden="true">&#8594;</span>
+                                }
+                            </span>
+                        }
+                        <span class="fix-tag-number">@tag.Tag</span>
+                    </span>
+                    <span>@tag.Name</span>
+                    <span>@tag.Type</span>
+                    <span>@(tag.IsRequired.HasValue ? (tag.IsRequired.Value ? "Yes" : "No") : "-")</span>
+                </div>
+                @if (tag.Enums.Count > 0 || tag.MessagesUsing.Count > 0)
+                {
+                    <div class="table-row details">
+                        @if (tag.Enums.Count > 0)
+                        {
+                            <span class="mono">Valid Enumeration: @string.Join(", ", tag.Enums.Select(e => $"{e.Value}={e.Description}"))</span>
+                        }
+                        @if (tag.MessagesUsing.Count > 0)
+                        {
+                            <span class="muted">Messages: @string.Join(", ", tag.MessagesUsing)</span>
+                        }
+                    </div>
+                }
+            }
+            </div>
+        }
+    }
+    else if (_isWildcardSearch && _selectedMessage is not null)
+    {
+        <div class="empty-state">No tags found for the selected message.</div>
+    }
+    else if (_isWildcardSearch && _selectedMessage is null)
+    {
+        <div class="empty-state">Select a message to list tags.</div>
+    }
+    else if (_isHeaderSearch)
+    {
+        <div class="empty-state">No header tags found.</div>
+    }
+    else if (string.IsNullOrWhiteSpace(_tagInput))
+    {
+        <div class="empty-state">Enter a tag number or name to see details.</div>
+    }
+    else
+    {
+        <div class="empty-state">No tags found. Try another search.</div>
+    }
+</section>
+
+@code {
+    private string _statusMessage = "Ready";
+    private string _selectedDictionaryKey = string.Empty;
+    private string _messageInput = string.Empty;
+    private string _tagInput = string.Empty;
+    private FixDictionaryMessageOption? _selectedMessage;
+    private readonly List<FixDictionaryOption> _dictionaryOptions = new();
+    private readonly List<FixDictionaryMessageOption> _messageSuggestions = new();
+    private readonly List<FixDictionaryFieldOption> _tagSuggestions = new();
+    private readonly List<FixDictionaryTag> _tagResults = new();
+    private readonly List<FixDictionaryTag> _tagResultsBase = new();
+    private int _messageSuggestionIndex = -1;
+    private int _tagSuggestionIndex = -1;
+    private bool _isMessageSuggestionOpen;
+    private bool _isTagSuggestionOpen;
+    private bool _isWildcardSearch;
+    private bool _isHeaderSearch;
+    private string _sortKey = "default";
+    private bool _sortAscending = true;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadDictionaryOptionsAsync();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (_isMessageSuggestionOpen || _isTagSuggestionOpen)
+        {
+            await JS.InvokeVoidAsync("fixflowTagSuggest.updatePosition");
+        }
+    }
+
+    private bool _hasDictionary => !string.IsNullOrWhiteSpace(_selectedDictionaryKey) && _dictionaryOptions.Count > 0;
+
+    private FixDictionaryTag? SingleResult =>
+        _tagResults.Count == 1 ? _tagResults[0] : null;
+
+    private bool ShowSingleResultDetails =>
+        SingleResult != null && !_isWildcardSearch && !_isHeaderSearch;
+
+    private string SingleResultHeader =>
+        SingleResult == null
+            ? string.Empty
+            : $"Name: {SingleResult.Name} | Tag: {SingleResult.Tag} | Type: {SingleResult.Type}";
+
+    private bool ShowRequiredMessageInfo =>
+        ShowSingleResultDetails && _selectedMessage != null;
+
+    private string RequiredMessageInfo =>
+        _selectedMessage == null ? string.Empty : $"Required in {_selectedMessage.Display} message?";
+
+    private string RequiredMessageAnswer =>
+        SingleResult?.IsRequired == true ? "Yes" : "No";
+
+    private bool IsRequiredInMessage =>
+        SingleResult?.IsRequired == true;
+
+    private List<string> SingleEnumResults =>
+        SingleResult == null
+            ? new List<string>()
+            : SingleResult.Enums
+                .Select(option => string.IsNullOrWhiteSpace(option.Description)
+                    ? option.Value
+                    : $"{option.Value}-{option.Description}")
+                .ToList();
+
+    private List<string> SingleMessageResults =>
+        SingleResult == null
+            ? new List<string>()
+            : SingleResult.MessagesUsing.ToList();
+    private async Task LoadDictionaryOptionsAsync()
+    {
+        try
+        {
+            var response = await Http.GetFromJsonAsync<List<FixDictionaryOption>>("api/fix-dictionary/dictionaries");
+            if (response is not null)
+            {
+                _dictionaryOptions.Clear();
+                _dictionaryOptions.AddRange(response);
+            }
+        }
+        catch
+        {
+            _dictionaryOptions.Clear();
+        }
+
+        var defaultOption = _dictionaryOptions
+            .FirstOrDefault(option => string.Equals(option.Key, "FIX42.xml", StringComparison.OrdinalIgnoreCase))
+            ?? _dictionaryOptions.FirstOrDefault();
+
+        _selectedDictionaryKey = defaultOption?.Key ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(_selectedDictionaryKey))
+        {
+            _statusMessage = "Dictionary folder not found.";
+            return;
+        }
+
+        await LoadSelectedDictionaryAsync();
+    }
+
+    private async Task OnDictionaryChanged()
+    {
+        await LoadSelectedDictionaryAsync();
+    }
+
+    private async Task LoadSelectedDictionaryAsync()
+    {
+        ClearSearchState();
+
+        if (string.IsNullOrWhiteSpace(_selectedDictionaryKey))
+        {
+            _statusMessage = "Dictionary file not found.";
+            return;
+        }
+
+        try
+        {
+            var response = await Http.GetFromJsonAsync<FixDictionaryLoadResult>(
+                $"api/fix-dictionary/load?dictionary={Uri.EscapeDataString(_selectedDictionaryKey)}");
+            if (response is not null)
+            {
+                _statusMessage = response.StatusMessage;
+                _selectedMessage = response.DefaultMessage;
+                _messageInput = response.DefaultMessage?.Display ?? string.Empty;
+            }
+            else
+            {
+                _statusMessage = "Dictionary file not found.";
+            }
+        }
+        catch
+        {
+            _statusMessage = "Failed to load dictionary.";
+        }
+
+        _tagInput = string.Empty;
+        await UpdateSearchResultsAsync();
+    }
+
+    private async Task OnMessageInput(ChangeEventArgs args)
+    {
+        _messageInput = args.Value?.ToString() ?? string.Empty;
+        ResetSort();
+        await UpdateMessageSuggestionsAsync();
+        await ResolveSelectedMessageAsync();
+        await UpdateTagSuggestionsAsync();
+        await UpdateSearchResultsAsync();
+    }
+
+    private async Task OnTagInput(ChangeEventArgs args)
+    {
+        _tagInput = args.Value?.ToString() ?? string.Empty;
+        ResetSort();
+        await UpdateTagSuggestionsAsync();
+        await UpdateSearchResultsAsync();
+    }
+
+    private async Task UpdateMessageSuggestionsAsync()
+    {
+        _messageSuggestions.Clear();
+        _messageSuggestionIndex = -1;
+        _isMessageSuggestionOpen = false;
+
+        if (!_hasDictionary)
+        {
+            return;
+        }
+
+        var input = _messageInput.Trim();
+        if (string.IsNullOrWhiteSpace(input) || !char.IsLetter(input[0]))
+        {
+            return;
+        }
+
+        try
+        {
+            var response = await Http.GetFromJsonAsync<List<FixDictionaryMessageOption>>(
+                $"api/fix-dictionary/message-suggestions?dictionary={Uri.EscapeDataString(_selectedDictionaryKey)}&query={Uri.EscapeDataString(input)}");
+            if (response is not null && response.Count > 0)
+            {
+                _messageSuggestions.AddRange(response);
+                _isMessageSuggestionOpen = true;
+            }
+        }
+        catch
+        {
+            _messageSuggestions.Clear();
+        }
+    }
+
+    private async Task ResolveSelectedMessageAsync()
+    {
+        _selectedMessage = null;
+        if (!_hasDictionary)
+        {
+            return;
+        }
+
+        var input = _messageInput.Trim();
+        if (string.IsNullOrWhiteSpace(input))
+        {
+            return;
+        }
+
+        try
+        {
+            var response = await Http.GetFromJsonAsync<FixDictionaryMessageOption?>(
+                $"api/fix-dictionary/resolve-message?dictionary={Uri.EscapeDataString(_selectedDictionaryKey)}&input={Uri.EscapeDataString(input)}");
+            _selectedMessage = response;
+        }
+        catch
+        {
+            _selectedMessage = null;
+        }
+    }
+
+    private async Task UpdateTagSuggestionsAsync()
+    {
+        _tagSuggestions.Clear();
+        _tagSuggestionIndex = -1;
+        _isTagSuggestionOpen = false;
+
+        if (!_hasDictionary)
+        {
+            return;
+        }
+
+        var input = _tagInput.Trim();
+        if (string.IsNullOrWhiteSpace(input) || input.All(char.IsDigit) || !char.IsLetter(input[0]))
+        {
+            return;
+        }
+
+        try
+        {
+            var response = await Http.GetFromJsonAsync<List<FixDictionaryFieldOption>>(
+                $"api/fix-dictionary/tag-suggestions?dictionary={Uri.EscapeDataString(_selectedDictionaryKey)}&messageInput={Uri.EscapeDataString(_messageInput)}&query={Uri.EscapeDataString(input)}");
+            if (response is not null && response.Count > 0)
+            {
+                _tagSuggestions.AddRange(response);
+                _isTagSuggestionOpen = true;
+            }
+        }
+        catch
+        {
+            _tagSuggestions.Clear();
+        }
+    }
+
+    private async Task UpdateSearchResultsAsync()
+    {
+        ClearTagResults();
+        _isWildcardSearch = false;
+        _isHeaderSearch = false;
+
+        if (!_hasDictionary)
+        {
+            return;
+        }
+
+        var input = _tagInput.Trim();
+        var messageInput = _messageInput.Trim();
+
+        if (string.IsNullOrWhiteSpace(input) && messageInput == "-")
+        {
+            _isHeaderSearch = true;
+            await LoadHeaderTagsAsync();
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(input))
+        {
+            return;
+        }
+
+        try
+        {
+            if (input == "*")
+            {
+                _isWildcardSearch = true;
+            }
+
+            var response = await Http.GetFromJsonAsync<List<FixDictionaryTag>>(
+                $"api/fix-dictionary/search?dictionary={Uri.EscapeDataString(_selectedDictionaryKey)}&messageInput={Uri.EscapeDataString(_messageInput)}&query={Uri.EscapeDataString(input)}");
+            if (response is not null)
+            {
+                SetTagResults(response);
+            }
+        }
+        catch
+        {
+            ClearTagResults();
+        }
+    }
+
+    private async Task LoadHeaderTagsAsync()
+    {
+        try
+        {
+            var response = await Http.GetFromJsonAsync<List<FixDictionaryTag>>(
+                $"api/fix-dictionary/header-tags?dictionary={Uri.EscapeDataString(_selectedDictionaryKey)}");
+            if (response is not null)
+            {
+                SetTagResults(response);
+            }
+        }
+        catch
+        {
+            ClearTagResults();
+        }
+    }
+
+    private void ClearSearchState()
+    {
+        _messageInput = string.Empty;
+        _tagInput = string.Empty;
+        _selectedMessage = null;
+        _messageSuggestions.Clear();
+        _tagSuggestions.Clear();
+        _isMessageSuggestionOpen = false;
+        _isTagSuggestionOpen = false;
+        _messageSuggestionIndex = -1;
+        _tagSuggestionIndex = -1;
+        ClearTagResults();
+        _isWildcardSearch = false;
+        _isHeaderSearch = false;
+    }
+
+    private async Task CommitMessageSuggestion(FixDictionaryMessageOption suggestion)
+    {
+        _messageInput = suggestion.Display;
+        _selectedMessage = suggestion;
+        ResetSort();
+        _isMessageSuggestionOpen = false;
+        _messageSuggestions.Clear();
+        _messageSuggestionIndex = -1;
+        await UpdateTagSuggestionsAsync();
+        await UpdateSearchResultsAsync();
+    }
+
+    private async Task CommitTagSuggestion(FixDictionaryFieldOption suggestion)
+    {
+        _tagInput = suggestion.Name;
+        ResetSort();
+        _isTagSuggestionOpen = false;
+        _tagSuggestions.Clear();
+        _tagSuggestionIndex = -1;
+        await UpdateSearchResultsAsync();
+    }
+
+    private async Task OnMessageKeyDown(KeyboardEventArgs args)
+    {
+        if (_messageSuggestions.Count == 0)
+        {
+            return;
+        }
+
+        if (args.Key == "Enter")
+        {
+            if (_messageSuggestionIndex >= 0 && _messageSuggestionIndex < _messageSuggestions.Count)
+            {
+                await CommitMessageSuggestion(_messageSuggestions[_messageSuggestionIndex]);
+            }
+            return;
+        }
+
+        if (args.Key != "ArrowDown" && args.Key != "ArrowUp")
+        {
+            return;
+        }
+
+        _messageSuggestionIndex = UpdateSuggestionIndex(args.Key, _messageSuggestionIndex, _messageSuggestions.Count);
+    }
+
+    private async Task OnTagKeyDown(KeyboardEventArgs args)
+    {
+        if (_tagSuggestions.Count == 0)
+        {
+            return;
+        }
+
+        if (args.Key == "Enter")
+        {
+            if (_tagSuggestionIndex >= 0 && _tagSuggestionIndex < _tagSuggestions.Count)
+            {
+                await CommitTagSuggestion(_tagSuggestions[_tagSuggestionIndex]);
+            }
+            return;
+        }
+
+        if (args.Key != "ArrowDown" && args.Key != "ArrowUp")
+        {
+            return;
+        }
+
+        _tagSuggestionIndex = UpdateSuggestionIndex(args.Key, _tagSuggestionIndex, _tagSuggestions.Count);
+    }
+
+    private static int UpdateSuggestionIndex(string key, int current, int count)
+    {
+        if (count == 0)
+        {
+            return -1;
+        }
+
+        if (current < 0)
+        {
+            return key == "ArrowDown" ? 0 : count - 1;
+        }
+
+        return key == "ArrowDown"
+            ? Math.Min(current + 1, count - 1)
+            : Math.Max(current - 1, 0);
+    }
+
+    private void SetTagResults(IEnumerable<FixDictionaryTag> results)
+    {
+        _tagResultsBase.Clear();
+        _tagResultsBase.AddRange(results);
+        ApplySort();
+    }
+
+    private void ClearTagResults()
+    {
+        _tagResultsBase.Clear();
+        _tagResults.Clear();
+    }
+
+    private void ApplySort()
+    {
+        IEnumerable<FixDictionaryTag> ordered = _tagResultsBase;
+        if (string.Equals(_sortKey, "tag", StringComparison.OrdinalIgnoreCase))
+        {
+            ordered = _sortAscending
+                ? _tagResultsBase.OrderBy(tag => tag.Tag)
+                : _tagResultsBase.OrderByDescending(tag => tag.Tag);
+        }
+        else if (string.Equals(_sortKey, "name", StringComparison.OrdinalIgnoreCase))
+        {
+            ordered = _sortAscending
+                ? _tagResultsBase.OrderBy(tag => tag.Name, StringComparer.OrdinalIgnoreCase)
+                : _tagResultsBase.OrderByDescending(tag => tag.Name, StringComparer.OrdinalIgnoreCase);
+        }
+        else
+        {
+            ordered = _tagResultsBase.OrderBy(tag => tag.Order);
+        }
+
+        _tagResults.Clear();
+        _tagResults.AddRange(ordered);
+    }
+
+    private void ToggleSort(string key)
+    {
+        if (string.Equals(_sortKey, key, StringComparison.OrdinalIgnoreCase))
+        {
+            if (_sortAscending)
+            {
+                _sortAscending = false;
+            }
+            else
+            {
+                _sortKey = "default";
+                _sortAscending = true;
+            }
+        }
+        else
+        {
+            _sortKey = key;
+            _sortAscending = true;
+        }
+
+        ApplySort();
+    }
+
+    private void ResetSort()
+    {
+        _sortKey = "default";
+        _sortAscending = true;
+    }
+
+    private bool IsSortActive(string key) =>
+        string.Equals(_sortKey, key, StringComparison.OrdinalIgnoreCase);
+
+    private string SortIndicator(string key)
+    {
+        if (!IsSortActive(key))
+        {
+            return string.Empty;
+        }
+
+        return _sortAscending ? "▲" : "▼";
+    }
+}

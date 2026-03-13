@@ -146,7 +146,7 @@ namespace FixFlow.TradeAllocBridge.WPF.ViewModels
                 }
 
                 var timestampRaw = fields[0];
-                DateTime.TryParse(timestampRaw, CultureInfo.InvariantCulture, DateTimeStyles.AssumeLocal, out var timestamp);
+                var timestamp = ParseTimestampUtc(timestampRaw);
 
                 yield return new MessageLogEntry
                 {
@@ -210,10 +210,22 @@ namespace FixFlow.TradeAllocBridge.WPF.ViewModels
                 return Path.Combine(AppContext.BaseDirectory, "reports");
             }
 
-            var env = Environment.GetEnvironmentVariable("FIXFLOW_CLI_REPORTS");
-            if (!string.IsNullOrWhiteSpace(env) && Directory.Exists(env))
+            var envPath = ResolveEnvPath("FIXFLOW_CLI_REPORTS");
+            var ensuredEnv = EnsureReportsDir(envPath);
+            if (!string.IsNullOrWhiteSpace(ensuredEnv))
             {
-                return env;
+                return ensuredEnv;
+            }
+
+            var publishedPath = Path.GetFullPath(Path.Combine(
+                AppContext.BaseDirectory,
+                "..",
+                "FixFlowService",
+                "reports"));
+            var ensuredPublished = EnsureReportsDir(publishedPath);
+            if (!string.IsNullOrWhiteSpace(ensuredPublished))
+            {
+                return ensuredPublished;
             }
 
             var solutionRoot = FindAncestorWithFile(AppContext.BaseDirectory, "*.sln", maxLevels: 8);
@@ -246,6 +258,52 @@ namespace FixFlow.TradeAllocBridge.WPF.ViewModels
             return null;
         }
 
+        private static string? ResolveEnvPath(string envVar)
+        {
+            try
+            {
+                var env = Environment.GetEnvironmentVariable(envVar);
+                if (string.IsNullOrWhiteSpace(env))
+                {
+                    return null;
+                }
+
+                var candidate = env;
+                if (!Path.IsPathRooted(candidate))
+                {
+                    candidate = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, candidate));
+                }
+                else
+                {
+                    candidate = Path.GetFullPath(candidate);
+                }
+
+                return candidate;
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        private static string? EnsureReportsDir(string? path)
+        {
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                return null;
+            }
+
+            try
+            {
+                Directory.CreateDirectory(path);
+                return Directory.Exists(path) ? path : null;
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
         private static string? FindAncestorWithFile(string startPath, string searchPattern, int maxLevels)
         {
             try
@@ -262,6 +320,21 @@ namespace FixFlow.TradeAllocBridge.WPF.ViewModels
             }
 
             return null;
+        }
+
+        private static DateTime ParseTimestampUtc(string raw)
+        {
+            if (DateTimeOffset.TryParse(raw, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var dto))
+            {
+                return dto.UtcDateTime;
+            }
+
+            if (DateTime.TryParse(raw, CultureInfo.InvariantCulture, DateTimeStyles.AssumeLocal, out var local))
+            {
+                return local.ToUniversalTime();
+            }
+
+            return DateTime.MinValue;
         }
 
         private void ExportEntries()
@@ -318,6 +391,9 @@ namespace FixFlow.TradeAllocBridge.WPF.ViewModels
     public sealed class MessageLogEntry
     {
         public DateTime Timestamp { get; init; }
+        public DateTime LocalTimestamp => Timestamp.Kind == DateTimeKind.Utc
+            ? Timestamp.ToLocalTime()
+            : Timestamp;
         public string ClientId { get; init; } = string.Empty;
         public string AllocId { get; init; } = string.Empty;
         public string Side { get; init; } = string.Empty;
