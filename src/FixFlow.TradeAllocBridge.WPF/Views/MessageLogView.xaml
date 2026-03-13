@@ -64,7 +64,7 @@
                 </ContextMenu>
             </DataGrid.ContextMenu>
             <DataGrid.Columns>
-                <DataGridTextColumn Header="Timestamp" Width="120" Binding="{Binding Timestamp, StringFormat='yyyy-MM-dd HH:mm:ss'}"/>
+                <DataGridTextColumn Header="Time (Local)" Width="120" Binding="{Binding LocalTimestamp, StringFormat='yyyy-MM-dd HH:mm:ss'}"/>
                 <DataGridTextColumn Header="Client" Width="80" Binding="{Binding ClientId}"/>
                 <DataGridTextColumn Header="AllocID" Width="100" Binding="{Binding AllocId}"/>
                 <DataGridTextColumn Header="Side" Width="90" Binding="{Binding Side, Converter={StaticResource SideDisplayConverter}}"/>

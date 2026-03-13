@@ -190,6 +190,7 @@ public class GraphEmailService
         var match = Regex.Match(email, @"@([\w\.-]+)$");
         return match.Success ? match.Groups[1].Value.Trim().ToLowerInvariant() : string.Empty;
     }
+
 }
 
 /// <summary>

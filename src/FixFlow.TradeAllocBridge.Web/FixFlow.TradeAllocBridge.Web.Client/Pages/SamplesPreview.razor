@@ -1,0 +1,122 @@
+@page "/samples/preview"
+@inject HttpClient Http
+@inject NavigationManager Nav
+
+<PageTitle>Sample Preview</PageTitle>
+
+<section class="page-header">
+    <div>
+        <h1>Sample Preview</h1>
+        <p class="muted">@_fileName</p>
+        <div class="button-row">
+            <button class="btn"
+                    @onclick="BackToSamples">
+                Back to Samples
+            </button>
+            <a class="btn primary"
+               href="@GetDownloadUrl()"
+               download>
+                Download Sample
+            </a>
+        </div>
+        @if (_preview is not null)
+        {
+            <p class="muted sample-preview-count">Showing @_preview.PreviewRows of @_preview.TotalRows rows.</p>
+        }
+    </div>
+</section>
+
+<section class="card">
+    @if (_isLoading)
+    {
+        <div class="empty-state">Loading preview...</div>
+    }
+    else if (_loadFailed)
+    {
+        <div class="empty-state">Failed to load preview.</div>
+    }
+    else if (_preview is null || _preview.Headers.Count == 0)
+    {
+        <div class="empty-state">No preview data available.</div>
+    }
+    else
+    {
+        <div class="table table-scroll">
+            <div class="table-header">
+                @foreach (var header in _preview.Headers)
+                {
+                    <span>@header</span>
+                }
+            </div>
+            @foreach (var row in _preview.Rows)
+            {
+                <div class="table-row">
+                    @for (var i = 0; i < _preview.Headers.Count; i++)
+                    {
+                        <span>@(i < row.Count ? row[i] : string.Empty)</span>
+                    }
+                </div>
+            }
+        </div>
+    }
+
+</section>
+
+@code {
+    [SupplyParameterFromQuery]
+    public string? File { get; set; }
+
+    private bool _isLoading = true;
+    private bool _loadFailed;
+    private SamplePreviewResponse? _preview;
+    private string _fileName = string.Empty;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        await LoadPreviewAsync();
+    }
+
+    private async Task LoadPreviewAsync()
+    {
+        _isLoading = true;
+        _loadFailed = false;
+        _preview = null;
+
+        _fileName = File ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(_fileName))
+        {
+            _loadFailed = true;
+            _isLoading = false;
+            return;
+        }
+
+        try
+        {
+            var url = $"/api/samples/preview/{Uri.EscapeDataString(_fileName)}";
+            _preview = await Http.GetFromJsonAsync<SamplePreviewResponse>(url);
+        }
+        catch
+        {
+            _loadFailed = true;
+        }
+        finally
+        {
+            _isLoading = false;
+        }
+    }
+
+    private string GetDownloadUrl()
+    {
+        if (string.IsNullOrWhiteSpace(_fileName))
+        {
+            return "/api/samples";
+        }
+
+        return $"/api/samples/{Uri.EscapeDataString(_fileName)}";
+    }
+
+    private void BackToSamples()
+    {
+        Nav.NavigateTo("/samples");
+    }
+}

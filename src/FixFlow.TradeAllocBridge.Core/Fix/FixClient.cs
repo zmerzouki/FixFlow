@@ -2,6 +2,7 @@
 using QuickFix;
 using QuickFix.Fields;
 using System.Text;
+using System.Threading.Tasks;
 
 namespace FixFlow.TradeAllocBridge.Core.Fix
 {
@@ -56,8 +57,46 @@ namespace FixFlow.TradeAllocBridge.Core.Fix
                 var senderCompID = msg.Header.GetString(QuickFix.Fields.Tags.SenderCompID);
                 var targetCompID = msg.Header.GetString(QuickFix.Fields.Tags.TargetCompID);
                 var beginString = "FIX.4.2";
-                var sessionId = sessionID ?? new SessionID(beginString, senderCompID, targetCompID);
+                SessionID sessionId;
+                if (sessionID is not null)
+                {
+                    sessionId = sessionID;
+                }
+                else
+                {
+                    var senderSubId = msg.Header.IsSetField(QuickFix.Fields.Tags.SenderSubID)
+                        ? msg.Header.GetString(QuickFix.Fields.Tags.SenderSubID)
+                        : SessionID.NOT_SET;
+                    var targetSubId = msg.Header.IsSetField(QuickFix.Fields.Tags.TargetSubID)
+                        ? msg.Header.GetString(QuickFix.Fields.Tags.TargetSubID)
+                        : SessionID.NOT_SET;
+                    if (SessionID.IsSet(senderSubId) || SessionID.IsSet(targetSubId))
+                    {
+                        sessionId = new SessionID(beginString, senderCompID, senderSubId, targetCompID, targetSubId);
+                    }
+                    else
+                    {
+                        sessionId = new SessionID(beginString, senderCompID, targetCompID);
+                    }
+                }
                 var session = Session.LookupSession(sessionId);
+                if (session == null || !session.IsLoggedOn)
+                {
+                    _logger.LogInformation("⏳ Waiting for FIX session {SessionID} to logon...", sessionId);
+                    const int waitStepMs = 250;
+                    const int maxWaitMs = 5000;
+                    var waited = 0;
+                    while (waited < maxWaitMs)
+                    {
+                        await Task.Delay(waitStepMs);
+                        waited += waitStepMs;
+                        session = Session.LookupSession(sessionId);
+                        if (session != null && session.IsLoggedOn)
+                        {
+                            break;
+                        }
+                    }
+                }
                 var noConnectionMessage =
                     $"No connection could be established between {senderCompID} and {targetCompID}.";
 
@@ -72,6 +111,14 @@ namespace FixFlow.TradeAllocBridge.Core.Fix
                 msg.Header.SetField(new QuickFix.Fields.MsgType(msg.Header.GetString(QuickFix.Fields.Tags.MsgType)));
                 msg.Header.SetField(new QuickFix.Fields.SenderCompID(sessionId.SenderCompID));
                 msg.Header.SetField(new QuickFix.Fields.TargetCompID(sessionId.TargetCompID));
+                if (SessionID.IsSet(sessionId.SenderSubID))
+                {
+                    msg.Header.SetField(new QuickFix.Fields.SenderSubID(sessionId.SenderSubID));
+                }
+                if (SessionID.IsSet(sessionId.TargetSubID))
+                {
+                    msg.Header.SetField(new QuickFix.Fields.TargetSubID(sessionId.TargetSubID));
+                }
 
                 // ✅ Add required headers for validation (QuickFIX/n fills them when sending)
                 string serialized = msg.ToString();

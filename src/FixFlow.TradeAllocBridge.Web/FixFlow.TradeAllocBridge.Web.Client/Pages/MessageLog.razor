@@ -1,0 +1,311 @@
+@page "/message-log"
+@inject HttpClient Http
+@inject IJSRuntime JS
+@inject FixFlow.TradeAllocBridge.Web.Client.State.MessageLogState State
+
+<PageTitle>Message Log</PageTitle>
+
+<section class="page-header">
+    <div>
+        <h1>Message Log</h1>
+        <p>Review processed allocations, status, and FIX payloads.</p>
+    </div>
+</section>
+
+<section class="card">
+    <div class="form-grid message-log-grid">
+        <label class="grid-label label-source" for="msgSource">Source</label>
+        <label class="grid-label label-client" for="msgClient">Client ID</label>
+        <label class="grid-label label-status" for="msgStatus">Status</label>
+
+        <select id="msgSource" class="text-input grid-input field-source" @bind="State.SourceKey" @bind:after="OnSourceChanged">
+            <option value="Direct">Direct Ingestion</option>
+            <option value="Email">Email Automation</option>
+        </select>
+        <select id="msgClient" class="text-input grid-input field-client" @bind="State.ClientId" @bind:after="OnFilterChangedAsync">
+            <option value="">-- Select an Organization ID --</option>
+            @foreach (var option in State.MappingOptions)
+            {
+                <option value="@option.ClientId">@option.DisplayName</option>
+            }
+        </select>
+        <select id="msgStatus" class="text-input grid-input field-status" @bind="State.StatusFilter" @bind:after="OnFilterChangedAsync">
+            <option value="">All statuses</option>
+            @foreach (var status in State.StatusOptions)
+            {
+                <option value="@status">@status</option>
+            }
+        </select>
+    </div>
+    <div class="button-row">
+        <button class="btn" type="button" disabled="@_isBusy" @onclick="RefreshMessagesAsync">Refresh</button>
+        <button class="btn" disabled="@(_isBusy || State.Messages.Count == 0)" @onclick="ExportCsvAsync">Export CSV</button>
+    </div>
+</section>
+
+<section class="card">
+    @if (_isBusy)
+    {
+        <div class="empty-state">Loading messages...</div>
+    }
+    else if (State.Messages.Count == 0)
+    {
+        <div class="empty-state">No messages found for the current filter.</div>
+    }
+    else
+    {
+        if (State.Messages.Count > 1)
+        {
+            <div class="hint">@State.Messages.Count message(s) found.</div>
+        }
+        <div class="table">
+            <div class="table-header">
+                <span>Time (Local)</span>
+                <span>Client ID</span>
+                <span>Alloc ID</span>
+                <span>Symbol</span>
+                <span>Side</span>
+                <span>Status</span>
+            </div>
+            @foreach (var entry in State.Messages)
+            {
+                <div class="table-row">
+                    <span>@entry.Timestamp.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")</span>
+                    <span>@entry.ClientId</span>
+                    <span>@entry.AllocId</span>
+                    <span>@entry.Symbol</span>
+                    <span>@entry.Side</span>
+                    <span>@entry.ProcessingStatus</span>
+                </div>
+                <div class="table-row details">
+                    <span class="mono">@entry.RawFixMessage</span>
+                    <span class="error">@entry.ErrorDetails</span>
+                    <span class="muted">Source: @entry.Source</span>
+                </div>
+            }
+        </div>
+    }
+</section>
+
+@code {
+    private bool _isBusy;
+    private const int FilterDebounceMs = 300;
+    private CancellationTokenSource? _filterDebounceCts;
+    private bool _pendingFilterLoad;
+    protected override async Task OnInitializedAsync()
+    {
+        if (!State.HasLoadedMappings)
+        {
+            await LoadMappingsAsync();
+        }
+        if (!State.HasLoadedStatuses || !string.Equals(State.StatusOptionsSource, State.SourceKey, StringComparison.OrdinalIgnoreCase))
+        {
+            await LoadStatusOptionsAsync();
+        }
+        if (!State.HasLoadedMessages)
+        {
+            await LoadMessagesAsync();
+        }
+    }
+
+    private async Task LoadMappingsAsync()
+    {
+        try
+        {
+            var response = await Http.GetFromJsonAsync<List<MappingOption>>("api/mappings");
+            State.MappingOptions.Clear();
+            if (response is not null && response.Count > 0)
+            {
+                State.MappingOptions.AddRange(response);
+            }
+        }
+        catch
+        {
+            State.MappingOptions.Clear();
+        }
+
+        State.HasLoadedMappings = true;
+    }
+
+    private async Task LoadStatusOptionsAsync()
+    {
+        State.StatusOptions.Clear();
+        try
+        {
+            var response = await Http.GetFromJsonAsync<List<string>>(
+                $"api/messages/statuses?source={Uri.EscapeDataString(State.SourceKey)}");
+            if (response is not null)
+            {
+                State.StatusOptions.AddRange(response);
+            }
+        }
+        catch
+        {
+            State.StatusOptions.Clear();
+        }
+
+        bool hasStatus = false;
+        foreach (var status in State.StatusOptions)
+        {
+            if (string.Equals(status, State.StatusFilter, StringComparison.OrdinalIgnoreCase))
+            {
+                hasStatus = true;
+                break;
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(State.StatusFilter) && !hasStatus)
+        {
+            State.StatusFilter = string.Empty;
+        }
+
+        State.StatusOptionsSource = State.SourceKey;
+        State.HasLoadedStatuses = true;
+    }
+
+    private async Task LoadMessagesAsync()
+    {
+        _isBusy = true;
+        State.Messages.Clear();
+
+        try
+        {
+            var queryParts = new List<string>
+            {
+                $"source={Uri.EscapeDataString(State.SourceKey)}"
+            };
+            if (!string.IsNullOrWhiteSpace(State.ClientId))
+            {
+                queryParts.Add($"clientId={Uri.EscapeDataString(State.ClientId)}");
+            }
+            if (!string.IsNullOrWhiteSpace(State.StatusFilter))
+            {
+                queryParts.Add($"status={Uri.EscapeDataString(State.StatusFilter)}");
+            }
+
+            var url = $"api/messages?{string.Join("&", queryParts)}";
+            var response = await Http.GetFromJsonAsync<List<MessageLogEntry>>(url);
+            if (response is not null)
+            {
+                State.Messages.AddRange(response);
+            }
+        }
+        catch
+        {
+            // Swallow for now; UI already indicates empty state.
+        }
+        finally
+        {
+            _isBusy = false;
+            State.HasLoadedMessages = true;
+            if (_pendingFilterLoad)
+            {
+                _pendingFilterLoad = false;
+                await DebouncedLoadMessagesAsync();
+            }
+        }
+    }
+
+    private async Task OnSourceChanged()
+    {
+        State.StatusFilter = string.Empty;
+        await LoadStatusOptionsAsync();
+        await DebouncedLoadMessagesAsync();
+    }
+
+    private async Task OnFilterChangedAsync()
+    {
+        await DebouncedLoadMessagesAsync();
+    }
+
+    private async Task RefreshMessagesAsync()
+    {
+        if (_isBusy)
+        {
+            return;
+        }
+
+        await LoadStatusOptionsAsync();
+        await LoadMessagesAsync();
+    }
+
+    private async Task DebouncedLoadMessagesAsync()
+    {
+        _filterDebounceCts?.Cancel();
+        _filterDebounceCts?.Dispose();
+        _filterDebounceCts = new CancellationTokenSource();
+        var token = _filterDebounceCts.Token;
+
+        try
+        {
+            await Task.Delay(FilterDebounceMs, token);
+        }
+        catch (TaskCanceledException)
+        {
+            return;
+        }
+
+        if (token.IsCancellationRequested)
+        {
+            return;
+        }
+
+        if (_isBusy)
+        {
+            _pendingFilterLoad = true;
+            return;
+        }
+
+        await LoadMessagesAsync();
+    }
+
+    private async Task ExportCsvAsync()
+    {
+        if (State.Messages.Count == 0)
+        {
+            return;
+        }
+
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine("TimestampUtc,ClientId,AllocId,Symbol,Side,Status,ErrorDetails,RawFixMessage,Source,ReportFile");
+
+        foreach (var entry in State.Messages)
+        {
+            sb.Append(CsvEscape(entry.Timestamp.ToString("u")));
+            sb.Append(',');
+            sb.Append(CsvEscape(entry.ClientId));
+            sb.Append(',');
+            sb.Append(CsvEscape(entry.AllocId));
+            sb.Append(',');
+            sb.Append(CsvEscape(entry.Symbol));
+            sb.Append(',');
+            sb.Append(CsvEscape(entry.Side));
+            sb.Append(',');
+            sb.Append(CsvEscape(entry.ProcessingStatus));
+            sb.Append(',');
+            sb.Append(CsvEscape(entry.ErrorDetails));
+            sb.Append(',');
+            sb.Append(CsvEscape(entry.RawFixMessage));
+            sb.Append(',');
+            sb.Append(CsvEscape(entry.Source));
+            sb.Append(',');
+            sb.Append(CsvEscape(entry.ReportFile));
+            sb.AppendLine();
+        }
+
+        var fileName = $"message_log_{DateTime.UtcNow:yyyyMMdd_HHmmss}.csv";
+        await JS.InvokeVoidAsync("fixflowDownloadFile", fileName, "text/csv", sb.ToString());
+    }
+
+    private static string CsvEscape(string? value)
+    {
+        if (string.IsNullOrEmpty(value))
+        {
+            return "\"\"";
+        }
+
+        var escaped = value.Replace("\"", "\"\"");
+        return $"\"{escaped}\"";
+    }
+
+}

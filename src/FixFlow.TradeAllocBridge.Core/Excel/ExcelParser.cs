@@ -44,14 +44,14 @@ public class ExcelParser
 
         return extension switch
         {
-            ".csv" => ParseCsv(filePath, useColumnPositions),
-            ".xls" => ParseXls(filePath, useColumnPositions),
-            ".xlsx" or ".xlsm" or ".xltx" or ".xltm" => ParseXls(filePath, useColumnPositions), // use NPOI for both xls and xlsx to avoid ClosedXML dependency issues
+            ".csv" => ParseCsv(filePath, useColumnPositions, mapping),
+            ".xls" => ParseXls(filePath, useColumnPositions, mapping),
+            ".xlsx" or ".xlsm" or ".xltx" or ".xltm" => ParseXls(filePath, useColumnPositions, mapping), // use NPOI for both xls and xlsx to avoid ClosedXML dependency issues
             _ => throw new NotSupportedException($"Extension '{extension}' is not supported. Supported extensions are '.xlsx', '.xlsm', '.xltx', '.xltm', '.xls', and '.csv'.")
         };
     }
 
-    private List<TradeRecord> ParseCsv(string filePath, bool useColumnPositions)
+    private List<TradeRecord> ParseCsv(string filePath, bool useColumnPositions, MappingConfig? mapping)
     {
         var trades = new List<TradeRecord>();
         var lines = File.ReadAllLines(filePath);
@@ -148,7 +148,13 @@ public class ExcelParser
             }
 
             if (record.Fields.Count > 0 && anyValue)
+            {
+                if (ShouldSkipRecord(record, mapping))
+                {
+                    continue;
+                }
                 trades.Add(record);
+            }
         }
 
         _logger?.LogInformation("Parsed {Count} trade record(s) from CSV {File}", trades.Count, Path.GetFileName(filePath));
@@ -196,7 +202,7 @@ public class ExcelParser
         return values;
     }
 
-    private List<TradeRecord> ParseXls(string filePath, bool useColumnPositions)
+    private List<TradeRecord> ParseXls(string filePath, bool useColumnPositions, MappingConfig? mapping)
     {
         var trades = new List<TradeRecord>();
 
@@ -280,7 +286,13 @@ public class ExcelParser
             }
 
             if (record.Fields.Count > 0 && anyValue)
+            {
+                if (ShouldSkipRecord(record, mapping))
+                {
+                    continue;
+                }
                 trades.Add(record);
+            }
         }
 
         _logger?.LogInformation("Parsed {Count} trade record(s) from Excel {File}", trades.Count, Path.GetFileName(filePath));
@@ -529,6 +541,81 @@ public class ExcelParser
             CellType.Boolean => cell.BooleanCellValue.ToString(),
             _ => string.Empty
         };
+    }
+
+    private static bool ShouldSkipRecord(TradeRecord record, MappingConfig? mapping)
+    {
+        if (mapping?.TradeAllocations == null || mapping.TradeAllocations.Count == 0)
+        {
+            return false;
+        }
+
+        var mappedValues = new List<string>();
+        foreach (var key in mapping.TradeAllocations.Keys)
+        {
+            if (record.Fields.TryGetValue(key, out var value))
+            {
+                mappedValues.Add(value ?? string.Empty);
+            }
+        }
+
+        if (mappedValues.Count == 0)
+        {
+            return false;
+        }
+
+        var nonEmptyValues = mappedValues
+            .Select(value => value.Trim())
+            .Where(value => !string.IsNullOrWhiteSpace(value))
+            .ToList();
+
+        if (nonEmptyValues.Count < 3)
+        {
+            return true;
+        }
+
+        return IsRepeatedCharRow(nonEmptyValues);
+    }
+
+    private static bool IsRepeatedCharRow(IReadOnlyList<string> values)
+    {
+        if (values.Count < 2)
+        {
+            return false;
+        }
+
+        char? repeatedChar = null;
+        foreach (var value in values)
+        {
+            if (value.Length == 0)
+            {
+                continue;
+            }
+
+            var candidate = value[0];
+            if (char.IsLetterOrDigit(candidate))
+            {
+                return false;
+            }
+            for (var i = 1; i < value.Length; i++)
+            {
+                if (value[i] != candidate)
+                {
+                    return false;
+                }
+            }
+
+            if (repeatedChar == null)
+            {
+                repeatedChar = candidate;
+            }
+            else if (repeatedChar.Value != candidate)
+            {
+                return false;
+            }
+        }
+
+        return repeatedChar != null;
     }
 
     // ClosedXML parser removed in favor of NPOI-based path to avoid font-related dependency issues.

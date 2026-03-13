@@ -3,6 +3,8 @@ using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using System.Text.RegularExpressions;
+using FixFlow.TradeAllocBridge.Core.Excel;
+using FixFlow.TradeAllocBridge.Core.Config;
 using System.Xml.Linq;
 
 namespace FixFlow.TradeAllocBridge.Core.Fix;
@@ -15,6 +17,7 @@ public static class FixValueNormalizer
 {
     private static readonly Lazy<HashSet<int>> NumericTags = new(LoadNumericTags);
     private static readonly Regex AllocAccountRegex = new(@"(?:^|\s)@([A-Za-z0-9][A-Za-z0-9._-]*)", RegexOptions.Compiled);
+    private static readonly Regex AlphaNumRegex = new(@"^[A-Za-z0-9]+$", RegexOptions.Compiled);
     /// <summary>
     /// Backwards-compatible normalization (no row context).
     /// </summary>
@@ -45,7 +48,7 @@ public static class FixValueNormalizer
         return tag switch
         {
             48 => NormalizeSecID(raw),
-            22 => string.IsNullOrEmpty(raw) ? "8" : raw.Trim(), // fallback to custom code if missing
+            22 => raw, // no default; only explicit or inferred values
             54 => NormalizeSide(raw),
             13 => NormalizeCommType(raw),
             79 => NormalizeAllocAccount(raw),
@@ -125,6 +128,44 @@ public static class FixValueNormalizer
         return (string.Empty, string.Empty);
     }
 
+    /// <summary>
+    /// Infers SecurityIDSource (tag 22) from the SecurityID (tag 48) format.
+    /// </summary>
+    public static string? InferSecurityIdSourceFromValue(string? securityId)
+    {
+        if (string.IsNullOrWhiteSpace(securityId))
+        {
+            return null;
+        }
+
+        var trimmed = securityId.Trim();
+        if (!AlphaNumRegex.IsMatch(trimmed))
+        {
+            return null;
+        }
+
+        return trimmed.Length switch
+        {
+            9 => "1",   // CUSIP
+            7 => "2",   // SEDOL
+            4 => "3",   // QUIK
+            5 => "3",   // QUIK
+            12 => "4",  // ISIN
+            _ => null
+        };
+    }
+
+    public static bool IsValidSecurityIdSource(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return false;
+        }
+
+        var trimmed = value.Trim();
+        return trimmed.Length == 1 && char.IsLetterOrDigit(trimmed[0]);
+    }
+
     private static bool TryGetNonEmpty(
         IReadOnlyDictionary<string, string> row,
         string key,
@@ -164,9 +205,9 @@ public static class FixValueNormalizer
     private static string NormalizeSide(string value)
     {
         value = value.ToUpperInvariant();
-        if (value == "BUY" || value == "B" || value == "COVER") return "1";
-        if (value == "SELL" || value == "S" || value == "LONG") return "2";
-        if (value.Contains("SSE") || value.Contains("SHORT EXEMPT")) return "6";
+        if (value == "BUY" || value == "B" || value == "BOUGHT" || value.Contains("COVER")) return "1";
+        if (value == "SELL" || value == "S" || value == "SOLD" || value == "LONG") return "2";
+        if (value.Contains("SSE") || value.Contains("EXEMPT") || value.Contains("SHORT EXEMPT")) return "6";
         if (value.Contains("SHORT")) return "5";
         return "1";
     }
@@ -177,6 +218,7 @@ public static class FixValueNormalizer
     private static bool IsKnownSideToken(string value) =>
         value == "BUY"
         || value == "B"
+        || value == "BOUGHT" 
         || value == "COVER"
         || value == "SELL"
         || value == "S"
@@ -187,7 +229,13 @@ public static class FixValueNormalizer
 
         private static string MapCommType(string value)
     {
-        var upper = (value ?? string.Empty).ToUpperInvariant();
+        var trimmed = (value ?? string.Empty).Trim();
+        if (trimmed.Length == 1 && char.IsDigit(trimmed[0]))
+        {
+            return trimmed; // already a FIX comm type code
+        }
+
+        var upper = trimmed.ToUpperInvariant();
 
         if (upper.Contains("CENT") || (upper.Contains("PER") && upper.Contains("SHARE")))
             return "1"; // cents per share
@@ -330,4 +378,79 @@ public static class FixValueNormalizer
 
         return tags;
     }
+
+    public static bool IsNumericTag(int tag) => NumericTags.Value.Contains(tag);
+
+    public static IReadOnlyList<NumericFieldIssue> FindNumericFieldIssues(
+        IEnumerable<TradeRecord> trades,
+        MappingConfig mapping)
+    {
+        var issues = new List<NumericFieldIssue>();
+        if (mapping?.TradeAllocations == null || mapping.TradeAllocations.Count == 0)
+        {
+            return issues;
+        }
+
+        foreach (var kvp in mapping.TradeAllocations)
+        {
+            if (!TryParseTagNumber(kvp.Value, out var tag))
+            {
+                continue;
+            }
+
+            if (!IsNumericTag(tag))
+            {
+                continue;
+            }
+
+            foreach (var trade in trades)
+            {
+                if (!trade.Fields.TryGetValue(kvp.Key, out var raw))
+                {
+                    continue;
+                }
+
+                var trimmed = raw?.Trim() ?? string.Empty;
+                if (trimmed.Length == 0)
+                {
+                    continue;
+                }
+
+                if (!decimal.TryParse(trimmed, NumberStyles.Number, CultureInfo.InvariantCulture, out _))
+                {
+                    issues.Add(new NumericFieldIssue(kvp.Key, tag, trimmed));
+                    break;
+                }
+            }
+        }
+
+        return issues;
+    }
+
+    public static string FormatColumnLabel(string columnKey)
+    {
+        return int.TryParse(columnKey, NumberStyles.Integer, CultureInfo.InvariantCulture, out var index)
+            ? $"Column {index}"
+            : columnKey;
+    }
+
+    public static bool TryParseTagNumber(string? value, out int tag)
+    {
+        tag = 0;
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return false;
+        }
+
+        var trimmed = value.Trim();
+        var match = Regex.Match(trimmed, @"\d+");
+        if (!match.Success)
+        {
+            return false;
+        }
+
+        return int.TryParse(match.Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out tag);
+    }
 }
+
+public record NumericFieldIssue(string ColumnKey, int Tag, string SampleValue);

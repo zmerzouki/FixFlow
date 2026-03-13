@@ -1,0 +1,20 @@
+{
+  "clientId": "HEADLESS",
+  "senderDomain": "GMAIL.COM",
+  "delimiter": ";",
+  "tradeAllocations": {
+    "1": "55",
+    "2": "54",
+    "3": "80",
+    "4": "153",
+    "5": "79"
+  },
+  "predefined": {
+    "49": "FIXFLOW",
+    "56": "BROKER",
+    "57": "BROKER_SUB",
+    "115": "HEADLESS_FIX_ALLOC",
+    "128": "BROKER_ALLOC",
+    "1": null
+  }
+}

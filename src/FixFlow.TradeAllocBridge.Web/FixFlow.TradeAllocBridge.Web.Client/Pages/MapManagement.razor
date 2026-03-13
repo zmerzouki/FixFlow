@@ -1,0 +1,1887 @@
+
+@page "/map-management"
+@using System.Text.Json
+@inject HttpClient Http
+@inject NavigationManager Nav
+@inject MapManagementState State
+@inject IJSRuntime JS
+@implements IAsyncDisposable
+
+<PageTitle>Map Management</PageTitle>
+
+<section class="page-header">
+    <div>
+        <h1>Map Management</h1>
+        <p>Maintain client mappings, validate coverage, and stage mappings for automation.</p>
+    </div>
+</section>
+
+<div class="map-layout">
+    <section class="card map-sidebar">
+        <div class="section-title">Client Mappings</div>
+        <div class="map-list">
+            @if (State.MappingOptions.Count == 0)
+            {
+                <div class="hint">No mappings found.</div>
+            }
+            else
+            {
+                @foreach (var option in State.MappingOptions)
+                {
+                    <button class="map-item @(IsSelected(option) ? "is-active" : string.Empty)" @onclick="() => SelectMappingAsync(option.ClientId)">
+                        <div class="map-item-row">
+                            <div class="map-item-title">@option.ClientId</div>
+                            @if (option.IsValidated)
+                            {
+                                <span class="map-item-check"
+                                      aria-label="Validated"
+                                      title="@($"Mapping validated on {option.DateValidated}")">✓</span>
+                            }
+                        </div>
+                    </button>
+                }
+            }
+        </div>
+        <div class="map-actions">
+            <button class="btn map-action map-action-new" disabled="@_isBusy" @onclick="NewMappingAsync"><span class="map-action-emoji">+</span> New</button>
+            <button class="btn map-action map-action-edit" disabled="@(!_canEdit)" @onclick="EditMappingAsync">&#x270E; Edit</button>
+            <button class="btn map-action map-action-validate" disabled="@(!_canValidate)" @onclick="ValidateMapping">&#x2714; Validate</button>
+            <div class="map-action-wrap" title="@AutomateTooltip">
+                <button class="btn map-action map-action-deploy" disabled="@(!_canDeploy)" @onclick="DeployMappingAsync">&#x2699; Automate</button>
+            </div>
+            <button class="btn map-action map-action-delete" disabled="@(!_canDelete)" @onclick="DeleteMappingAsync">&#x1F5D1;&#xFE0F; Delete</button>
+        </div>
+    </section>
+
+    <section class="card map-detail">
+        <div class="map-status">@State.StatusMessage</div>
+
+        @if (!ShowMappingDetails)
+        {
+            <div class="empty-state">Select a mapping to view details, or create a new one.</div>
+        }
+        else
+        {
+            <div class="map-section">
+                <div class="section-title">Client Identity</div>
+                <div class="map-form-grid map-form-grid-4">
+                    <div class="map-form-field">
+                        <label>Organization ID</label>
+                        <input class="text-input" disabled="@(!State.IsEditing)" @bind="State.ClientId" @bind:event="oninput" @bind:after="OnClientIdChanged" />
+                    </div>
+                    <div class="map-form-field">
+                        <label>Organization Name</label>
+                        <input class="text-input" disabled="@(!State.IsEditing)" @bind="State.OrganizationName" @bind:event="oninput" @bind:after="OnOrganizationNameChanged" />
+                    </div>
+                    <div class="map-form-field">
+                        <label>Sender Domain</label>
+                        <input class="text-input" disabled="@(!State.IsEditing)" @bind="State.SenderDomain" @bind:event="oninput" @bind:after="OnSenderDomainChanged" />
+                        @if (!string.IsNullOrWhiteSpace(SenderDomainWarning))
+                        {
+                            <div class="map-field-warning">@SenderDomainWarning</div>
+                        }
+                    </div>
+                    <div class="map-form-field">
+                        <label>FIX ID (Tag 115)</label>
+                        <input class="text-input" disabled="@(!State.IsEditing)" @bind="State.OnBehalfOfCompId" @bind:event="oninput" @bind:after="OnOnBehalfOfCompChanged" />
+                    </div>
+                </div>
+            </div>
+
+            <div class="map-section">
+                <div class="section-title">Trade Allocation Field Mappings</div>
+                <div class="map-field-grid">
+                    <div class="map-field-list">
+                        @if (State.FieldMappings.Count == 0)
+                        {
+                            <div class="empty-state">No fields mapped yet.</div>
+                        }
+                        else
+                        {
+                            @foreach (var field in State.FieldMappings)
+                            {
+                                var deps = GetDependencyTagsForField(field);
+                                var missingDeps = State.IsEditing ? GetMissingDependenciesForField(field, deps) : Array.Empty<string>();
+                                var hasMissingDeps = State.IsEditing && missingDeps.Count > 0;
+                                <button class="map-field-row @(IsSelected(field) ? "is-selected" : string.Empty) @(State.IsEditing ? "is-editing" : string.Empty) @(hasMissingDeps ? "has-missing-deps" : string.Empty)"
+                                        @onclick="() => SelectField(field)">
+                                    <div class="map-field-left">
+                                        <span class="tag-badge @TagLevelClass(field.TagLevel)">@field.TagLevel</span>
+                                        <span class="map-field-tag">@field.TagDisplay</span>
+                                    </div>
+                                    <div class="map-field-column">
+                                        <span class="map-field-column-name">@field.ColumnName</span>
+                                        @if (deps.Count > 0)
+                                        {
+                                            <span class="map-field-meta">
+                                                <span class="dep-badge" title="@GetDependencyTooltip(deps)">&#x1F517; Deps</span>
+                                                @if (hasMissingDeps)
+                                                {
+                                                    <span class="dep-warn" title="@GetMissingDependencyTooltip(missingDeps)">!</span>
+                                                }
+                                            </span>
+                                        }
+                                    </div>
+                                </button>
+                            }
+                        }
+                    </div>
+                    @if (State.IsEditing)
+                    {
+                        <div class="map-move">
+                            <button class="btn" disabled="@(!_canMoveFieldUp)" @onclick="MoveFieldUp">&#9650;</button>
+                            <button class="btn" disabled="@(!_canMoveFieldDown)" @onclick="MoveFieldDown">&#9660;</button>
+                        </div>
+                    }
+                </div>
+
+                @if (State.IsEditing)
+                {
+                    <div class="map-field-editor">
+                        <div class="map-field-editor-title">Add/Edit Field</div>
+                        <div class="map-field-editor-row">
+                            <div class="map-field-actions">
+                                <button class="icon-btn icon-add" type="button" disabled="@(!_canAddField)" @onclick="AddField" aria-label="Add" title="Add">
+                                    <svg viewBox="0 0 48 48" aria-hidden="true" focusable="false">
+                                        <circle cx="24" cy="24" r="18" fill="none" stroke="currentColor" stroke-width="3" />
+                                        <path d="M24 16v16M16 24h16" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" />
+                                    </svg>
+                                </button>
+                                <button class="icon-btn icon-update" type="button" disabled="@(!_canUpdateField)" @onclick="UpdateField" aria-label="Update" title="Update">
+                                    <svg viewBox="0 0 48 48" aria-hidden="true" focusable="false">
+                                        <path d="M34 18a12 12 0 0 0-20-4" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" />
+                                        <path d="M14 14h8v-8" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" />
+                                        <path d="M14 30a12 12 0 0 0 20 4" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" />
+                                        <path d="M34 34h-8v8" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" />
+                                    </svg>
+                                </button>
+                                <button class="icon-btn icon-delete" type="button" disabled="@(!_canRemoveField)" @onclick="RemoveField" aria-label="Delete" title="Delete">
+                                    <svg viewBox="0 0 48 48" aria-hidden="true" focusable="false">
+                                        <path d="M16 18h16l-1.5 18H17.5L16 18z" fill="none" stroke="currentColor" stroke-width="3" stroke-linejoin="round" />
+                                        <path d="M20 18V14h8v4M14 18h20" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" />
+                                        <path d="M22 24v8M26 24v8" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" />
+                                    </svg>
+                                </button>
+                            </div>
+                            <div class="map-field-inputs">
+                                <div class="map-field-input">
+                                    <label>Tag ID</label>
+                                    <div class="fix-suggest">
+                                        <div class="tag-input-wrap">
+                                            <div class="tag-input-overlay" aria-hidden="true">
+                                                <span class="tag-typed">@State.NewFieldTagInput</span>
+                                                @if (!string.IsNullOrWhiteSpace(TagSuffix))
+                                                {
+                                                    <span class="tag-suffix-inline @(_isTagInputFocused ? "" : "is-final")">@TagSuffix</span>
+                                                }
+                                            </div>
+                                            <input class="text-input"
+                                                   @bind="State.NewFieldTagInput"
+                                                   @bind:event="oninput"
+                                                   @bind:after="OnTagInputChanged"
+                                                   @onkeydown="OnTagKeyDown"
+                                                   @onkeydown:stopPropagation="State.IsFixFieldSuggestionOpen"
+                                                    data-fixflow-tag-input="true"
+                                                    @onfocus="OnTagFocus"
+                                                    @onblur="OnTagBlur" />
+                                        </div>
+                                        @if (State.IsFixFieldSuggestionOpen && State.FixFieldSuggestions.Count > 0)
+                                        {
+                                            <div class="fix-suggest-list">
+                                                @for (var i = 0; i < State.FixFieldSuggestions.Count; i++)
+                                                {
+                                                    var option = State.FixFieldSuggestions[i];
+                                                    <button class="fix-suggest-item @(i == _suggestionIndex ? "is-active" : string.Empty)"
+                                                            @onclick="() => SelectFixFieldSuggestion(option)"
+                                                            @onmouseover="() => _suggestionIndex = i"
+                                                            @onclick:preventDefault>
+                                                        @option.Display
+                                                    </button>
+                                                }
+                                            </div>
+                                        }
+                                    </div>
+                                </div>
+                                <div class="map-field-input">
+                                    <label title="Use a number (1, 2, 3...) to indicate column position for headless spreadsheets.">Column Name or Position</label>
+                                    <input class="text-input" @bind="State.NewFieldName" @bind:event="oninput" />
+                                </div>
+                            </div>
+                        </div>
+                        @if (State.IsEditing && MissingDependencyTags.Count > 0)
+                        {
+                            <div class="map-dependency-warning">
+                                @DependencyAnchorTagDisplay may require: @string.Join(", ", DependencyTagDisplays).
+                                If dependent tag(s) are not explicitely mapped to column(s), you may set their default values below.
+                            </div>
+                            <div class="map-defaults">
+                                @foreach (var dep in MissingDependencyTags)
+                                {
+                                    <div class="map-default-row">
+                                        <label>Default for @GetTagDisplay(dep)</label>
+                                        <input class="text-input"
+                                               value="@GetDefaultValue(dep)"
+                                               @oninput="e => SetDefaultValue(dep, e.Value?.ToString())" />
+                                    </div>
+                                }
+                            </div>
+                        }
+                    </div>
+                }
+            </div>
+
+            @if (State.IsEditing && !string.IsNullOrWhiteSpace(MissingRequiredTagsMessage))
+            {
+                <div class="map-required-warning">@MissingRequiredTagsMessage</div>
+            }
+
+            @if (State.IsEditing)
+            {
+                <div class="button-row">
+                    <button class="btn primary" disabled="@(!_canSave)" @onclick="SaveMappingAsync">Save</button>
+                    <button class="btn" @onclick="CancelAsync">Cancel</button>
+                </div>
+            }
+
+            @if (!State.IsEditing)
+            {
+                <div class="map-meta">
+                    <div><span class="label">Date Created:</span> <span class="value">@State.DateCreated</span></div>
+                    @if (!string.IsNullOrWhiteSpace(State.DateModified))
+                    {
+                        <div><span class="label">Date Modified:</span> <span class="value">@State.DateModified</span></div>
+                    }
+                    @if (!string.IsNullOrWhiteSpace(State.DateValidated))
+                    {
+                        <div><span class="label">Date Validated:</span> <span class="value">@State.DateValidated</span></div>
+                    }
+                    @if (!string.IsNullOrWhiteSpace(State.EmailAutomationStatus))
+                    {
+                   <div><span class="label">Email Automation Status:</span> <span class="value">@State.EmailAutomationStatus</span></div>
+                   }
+               </div>
+            }
+        }
+    </section>
+</div>
+
+@if (_showConfirm)
+{
+    <div class="ff-modal-backdrop" role="presentation">
+        <div class="ff-modal" role="dialog" aria-modal="true" aria-labelledby="ffConfirmTitle">
+            <div class="ff-modal-header" id="ffConfirmTitle">@_confirmTitle</div>
+            <div class="ff-modal-body">@_confirmMessage</div>
+            <div class="ff-modal-actions">
+                <button class="btn primary" @onclick="ConfirmYes">@_confirmConfirmText</button>
+                <button class="btn" @onclick="ConfirmNo">@_confirmCancelText</button>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    private bool _isBusy;
+    private bool _suppressChangeTracking;
+    private bool _suppressFixFieldSuggestion;
+    private int _suggestionIndex = -1;
+    private bool _isTagInputFocused;
+    private bool _hasDependencyDefaultChanges;
+    private bool _showConfirm;
+    private string _confirmTitle = "Confirm";
+    private string _confirmMessage = string.Empty;
+    private string _confirmConfirmText = "OK";
+    private string _confirmCancelText = "Cancel";
+    private Func<Task>? _confirmYesAction;
+    private Func<Task>? _confirmNoAction;
+    private DotNetObjectReference<MapManagement>? _tagInputDotNetRef;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await EnsureFixFieldsLoadedAsync();
+        await EnsureTagMetadataLoadedAsync();
+        await LoadMappingsAsync();
+
+        if (!State.IsEditing && !string.IsNullOrWhiteSpace(State.SelectedMapping))
+        {
+            await LoadMappingAsync(State.SelectedMapping);
+        }
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (State.IsEditing)
+        {
+            _tagInputDotNetRef ??= DotNetObjectReference.Create(this);
+            await JS.InvokeVoidAsync("fixflowTagSuggest.register", _tagInputDotNetRef);
+            if (State.IsFixFieldSuggestionOpen)
+            {
+                await JS.InvokeVoidAsync("fixflowTagSuggest.updatePosition");
+            }
+        }
+        else if (_tagInputDotNetRef is not null)
+        {
+            await JS.InvokeVoidAsync("fixflowTagSuggest.unregister");
+        }
+    }
+
+    private bool ShowMappingDetails => !State.IsFirstVisit || State.SelectedMapping != null || State.IsEditing;
+
+    private bool _canEdit => !_isBusy && State.SelectedMapping != null;
+    private bool _canValidate => !_isBusy && !State.IsEditing && State.SelectedMapping != null;
+    private bool _canDeploy => !_isBusy && IsDeploySelectionReady && HasSenderDomain;
+    private bool _canDelete => !_isBusy && !State.IsEditing && State.SelectedMapping != null;
+    private bool _canSave => !_isBusy && State.IsEditing && State.HasUnsavedChanges && HasRequiredTags && State.FieldMappings.Count > 0 && !string.IsNullOrWhiteSpace(State.ClientId);
+    private bool _canAddField => State.IsEditing && CanAddField;
+    private bool _canUpdateField => State.IsEditing && CanUpdateField;
+    private bool _canRemoveField => State.IsEditing && State.SelectedFieldMapping is not null;
+    private bool _canMoveFieldUp => State.IsEditing && GetSelectedFieldIndex() > 0;
+    private bool _canMoveFieldDown => State.IsEditing && GetSelectedFieldIndex() >= 0 && GetSelectedFieldIndex() < State.FieldMappings.Count - 1;
+
+    private static readonly string[] RequiredFixTags = { "54", "79", "80", "153" };
+
+    private string MissingRequiredTagsMessage
+    {
+        get
+        {
+            var missing = RequiredFixTags
+                .Where(tag => State.FieldMappings.All(f => !string.Equals(f.Tag.Trim(), tag, StringComparison.OrdinalIgnoreCase)))
+                .ToList();
+
+            var hasTag55 = State.FieldMappings.Any(f => string.Equals(f.Tag.Trim(), "55", StringComparison.OrdinalIgnoreCase));
+            var hasTag48 = State.FieldMappings.Any(f => string.Equals(f.Tag.Trim(), "48", StringComparison.OrdinalIgnoreCase));
+            if (!hasTag55 && !hasTag48)
+            {
+                missing.Add("55 or 48");
+            }
+            return missing.Count == 0
+                ? string.Empty
+                : $"This map cannot be saved because it is missing the mapping for tag(s): {string.Join(", ", missing)}";
+        }
+    }
+
+    private bool HasRequiredTags =>
+        RequiredFixTags.All(tag =>
+            State.FieldMappings.Any(f => string.Equals(f.Tag.Trim(), tag, StringComparison.OrdinalIgnoreCase)))
+        && (State.FieldMappings.Any(f => string.Equals(f.Tag.Trim(), "55", StringComparison.OrdinalIgnoreCase))
+            || State.FieldMappings.Any(f => string.Equals(f.Tag.Trim(), "48", StringComparison.OrdinalIgnoreCase)));
+
+    private async Task LoadMappingsAsync(bool updateStatus = true)
+    {
+        try
+        {
+            var response = await Http.GetFromJsonAsync<List<MappingOption>>("api/mappings");
+            State.MappingOptions.Clear();
+            if (response is not null && response.Count > 0)
+            {
+                State.MappingOptions.AddRange(response);
+            }
+        }
+        catch
+        {
+            State.MappingOptions.Clear();
+        }
+
+        if (State.SelectedMapping is not null &&
+            State.MappingOptions.All(m => !string.Equals(m.ClientId, State.SelectedMapping, StringComparison.OrdinalIgnoreCase)))
+        {
+            State.SelectedMapping = null;
+        }
+
+        State.HasLoadedMappings = true;
+        if (updateStatus && !State.IsEditing)
+        {
+            State.StatusMessage = $"Loaded {State.MappingOptions.Count} mapping(s)";
+        }
+    }
+
+    private async Task EnsureFixFieldsLoadedAsync()
+    {
+        if (State.HasLoadedFixFields)
+        {
+            return;
+        }
+
+        try
+        {
+            var response = await Http.GetFromJsonAsync<List<FixFieldOption>>("api/map-management/fix-fields");
+            State.FixFieldOptions.Clear();
+            if (response is not null)
+            {
+                State.FixFieldOptions.AddRange(response);
+            }
+        }
+        catch
+        {
+            State.FixFieldOptions.Clear();
+        }
+
+        State.HasLoadedFixFields = true;
+    }
+
+    private async Task EnsureTagMetadataLoadedAsync()
+    {
+        if (State.HasLoadedTagMetadata)
+        {
+            return;
+        }
+
+        try
+        {
+            var response = await Http.GetFromJsonAsync<List<FixTagMetadata>>("api/map-management/tag-metadata");
+            State.TagMetadata.Clear();
+            if (response is not null)
+            {
+                foreach (var item in response)
+                {
+                    if (!string.IsNullOrWhiteSpace(item.Tag))
+                    {
+                        State.TagMetadata[item.Tag] = item;
+                    }
+                }
+            }
+        }
+        catch
+        {
+            State.TagMetadata.Clear();
+        }
+
+        State.HasLoadedTagMetadata = true;
+    }
+
+    private async Task SelectMappingAsync(string clientId)
+    {
+        State.IsFirstVisit = false;
+        State.SelectedMapping = clientId;
+        if (State.IsEditing)
+        {
+            return;
+        }
+
+        await LoadMappingAsync(clientId);
+    }
+
+    private async Task LoadMappingAsync(string clientId)
+    {
+        if (string.IsNullOrWhiteSpace(clientId))
+        {
+            return;
+        }
+
+        _suppressChangeTracking = true;
+        try
+        {
+            var mapping = await Http.GetFromJsonAsync<MappingEditorDto>($"api/map-management/mapping/{Uri.EscapeDataString(clientId)}");
+            if (mapping is null)
+            {
+                State.StatusMessage = "Mapping not found.";
+                return;
+            }
+
+            ApplyMapping(mapping);
+            State.StatusMessage = $"Loaded mapping: {mapping.ClientId}";
+        }
+        catch (Exception ex)
+        {
+            State.StatusMessage = $"Error loading mapping: {ex.Message}";
+        }
+        finally
+        {
+            _suppressChangeTracking = false;
+        }
+    }
+
+    private void ApplyMapping(MappingEditorDto mapping)
+    {
+        State.ClientId = mapping.ClientId ?? string.Empty;
+        State.OriginalClientId = mapping.ClientId ?? string.Empty;
+        State.OrganizationName = mapping.OrganizationName ?? string.Empty;
+        State.SenderDomain = mapping.SenderDomain ?? string.Empty;
+        State.SenderCompId = mapping.SenderCompId ?? string.Empty;
+        State.TargetCompId = mapping.TargetCompId ?? string.Empty;
+        State.TargetSubId = mapping.TargetSubId ?? string.Empty;
+        State.OnBehalfOfCompId = mapping.OnBehalfOfCompId ?? string.Empty;
+        State.DeliverToCompId = mapping.DeliverToCompId ?? string.Empty;
+        State.DateCreated = mapping.DateCreated ?? string.Empty;
+        State.DateValidated = mapping.DateValidated ?? string.Empty;
+        State.DateModified = mapping.DateModified ?? string.Empty;
+        State.EmailAutomationStatus = mapping.EmailAutomationStatus ?? "Inactive";
+        State.HasDeployedCopy = mapping.HasDeployedCopy;
+        State.FieldMappings.Clear();
+        State.DefaultTagValues.Clear();
+        State.FieldDefaultTagValues.Clear();
+        if (mapping.Fields is not null)
+        {
+            State.FieldMappings.AddRange(mapping.Fields);
+        }
+        if (mapping.Defaults is not null)
+        {
+            foreach (var entry in mapping.Defaults)
+            {
+                if (!string.IsNullOrWhiteSpace(entry.Tag))
+                {
+                    State.DefaultTagValues[entry.Tag.Trim()] = entry.Value ?? string.Empty;
+                }
+            }
+        }
+        if (mapping.FieldDefaults is not null)
+        {
+            foreach (var entry in mapping.FieldDefaults)
+            {
+                var column = entry.ColumnName?.Trim() ?? string.Empty;
+                var tag = entry.Tag?.Trim() ?? string.Empty;
+                var value = entry.Value?.Trim() ?? string.Empty;
+                if (string.IsNullOrWhiteSpace(column) || string.IsNullOrWhiteSpace(tag) || string.IsNullOrWhiteSpace(value))
+                {
+                    continue;
+                }
+
+                if (!State.FieldDefaultTagValues.TryGetValue(column, out var tagDefaults))
+                {
+                    tagDefaults = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                    State.FieldDefaultTagValues[column] = tagDefaults;
+                }
+
+                tagDefaults[tag] = value;
+            }
+        }
+        State.SelectedFieldMapping = null;
+        State.NewFieldName = string.Empty;
+        State.NewFieldTag = string.Empty;
+        State.NewFieldTagInput = string.Empty;
+        State.FixFieldSuggestions.Clear();
+        State.IsFixFieldSuggestionOpen = false;
+        _hasDependencyDefaultChanges = false;
+        State.HasUnsavedChanges = false;
+    }
+
+    private async Task NewMappingAsync()
+    {
+        _suppressChangeTracking = true;
+        try
+        {
+            var defaults = await Http.GetFromJsonAsync<MappingDefaultsResponse>("api/map-management/defaults");
+            State.ClientId = string.Empty;
+            State.OriginalClientId = null;
+            State.OrganizationName = string.Empty;
+            State.SenderDomain = string.Empty;
+            State.SenderCompId = defaults?.SenderCompId ?? string.Empty;
+            State.TargetCompId = defaults?.TargetCompId ?? string.Empty;
+            State.TargetSubId = defaults?.TargetSubId ?? string.Empty;
+            State.OnBehalfOfCompId = defaults?.OnBehalfOfCompId ?? string.Empty;
+            State.DeliverToCompId = defaults?.DeliverToCompId ?? string.Empty;
+            State.DateCreated = string.Empty;
+            State.DateValidated = string.Empty;
+            State.DateModified = string.Empty;
+            State.EmailAutomationStatus = "Inactive";
+            State.HasDeployedCopy = false;
+            State.FieldMappings.Clear();
+            State.DefaultTagValues.Clear();
+            State.FieldDefaultTagValues.Clear();
+            var defaultFields = defaults?.DefaultFields?.ToList() ?? new List<MappingFieldInput>();
+            if (defaultFields.Count == 0)
+            {
+                defaultFields.AddRange(new[]
+                {
+                    new MappingFieldInput("Side", "54"),
+                    new MappingFieldInput("Symbol", "55"),
+                    new MappingFieldInput("Trade Date", "75"),
+                    new MappingFieldInput("Allocation Account", "79"),
+                    new MappingFieldInput("Shares Qty", "80"),
+                    new MappingFieldInput("Average Price", "153")
+                });
+            }
+
+            foreach (var field in defaultFields)
+            {
+                var entry = BuildFieldEntry(field.ColumnName, field.Tag);
+                State.FieldMappings.Add(entry);
+            }
+            State.SelectedFieldMapping = null;
+            State.NewFieldName = string.Empty;
+            State.NewFieldTag = string.Empty;
+            State.NewFieldTagInput = string.Empty;
+            State.FixFieldSuggestions.Clear();
+            State.IsFixFieldSuggestionOpen = false;
+            State.IsEditing = true;
+            State.HasUnsavedChanges = true;
+            State.IsFirstVisit = false;
+            State.StatusMessage = "Creating new mapping...";
+        }
+        catch (Exception ex)
+        {
+            State.StatusMessage = $"Failed to load defaults: {ex.Message}";
+        }
+        finally
+        {
+            _suppressChangeTracking = false;
+        }
+    }
+
+    private async Task EditMappingAsync()
+    {
+        if (string.IsNullOrWhiteSpace(State.SelectedMapping))
+        {
+            State.StatusMessage = "Please select a mapping to edit";
+            return;
+        }
+
+        State.IsFirstVisit = false;
+        var targetClientId = State.SelectedMapping;
+        var currentClientId = State.ClientId;
+
+        if (State.IsEditing &&
+            !string.IsNullOrWhiteSpace(currentClientId) &&
+            !string.Equals(currentClientId, targetClientId, StringComparison.OrdinalIgnoreCase))
+        {
+            if (State.HasUnsavedChanges)
+            {
+                ShowConfirm(
+                    "Confirm Save",
+                    $"Want to save your changes for \"{currentClientId}\" map?",
+                    () => ConfirmEditSaveAsync(targetClientId!, currentClientId),
+                    () => ConfirmEditDiscardAsync(targetClientId!));
+                return;
+            }
+        }
+
+        if (!string.Equals(State.ClientId, targetClientId, StringComparison.OrdinalIgnoreCase))
+        {
+            await LoadMappingAsync(targetClientId!);
+        }
+
+        State.IsEditing = true;
+        State.HasUnsavedChanges = false;
+        State.StatusMessage = $"Editing: {targetClientId}";
+    }
+
+    private async Task ConfirmEditSaveAsync(string targetClientId, string currentClientId)
+    {
+        await SaveMappingAsync();
+        if (State.HasUnsavedChanges)
+        {
+            return;
+        }
+
+        if (!string.Equals(State.ClientId, targetClientId, StringComparison.OrdinalIgnoreCase))
+        {
+            await LoadMappingAsync(targetClientId);
+        }
+
+        State.IsEditing = true;
+        State.HasUnsavedChanges = false;
+        State.StatusMessage = $"Editing: {targetClientId}";
+    }
+
+    private async Task ConfirmEditDiscardAsync(string targetClientId)
+    {
+        await LoadMappingAsync(targetClientId);
+        State.IsEditing = true;
+        State.HasUnsavedChanges = false;
+        State.StatusMessage = $"Editing: {targetClientId}";
+    }
+
+    private async Task SaveMappingAsync()
+    {
+        if (string.IsNullOrWhiteSpace(State.ClientId))
+        {
+            State.StatusMessage = "Client ID is required";
+            return;
+        }
+
+        if (State.FieldMappings.Count == 0)
+        {
+            State.StatusMessage = "At least one field mapping is required";
+            return;
+        }
+
+        if (!HasRequiredTags)
+        {
+            State.StatusMessage = "Missing required FIX fields. Please map tags 54, 79, 80, 153, and either 55 or 48 before saving.";
+            return;
+        }
+
+        _isBusy = true;
+        try
+        {
+            SyncDefaultValuesWithMappings();
+            var fields = State.FieldMappings
+                .Select(f => new MappingFieldInput(f.ColumnName.Trim(), f.Tag.Trim()))
+                .Where(f => !string.IsNullOrWhiteSpace(f.ColumnName) && !string.IsNullOrWhiteSpace(f.Tag))
+                .ToList();
+
+            var defaults = State.DefaultTagValues
+                .Where(kvp => !string.IsNullOrWhiteSpace(kvp.Key) && !string.IsNullOrWhiteSpace(kvp.Value))
+                .Select(kvp => new MappingDefaultValue(kvp.Key.Trim(), kvp.Value.Trim()))
+                .ToList();
+
+            var fieldDefaults = new List<MappingFieldDefaultValue>();
+            foreach (var columnEntry in State.FieldDefaultTagValues)
+            {
+                var column = columnEntry.Key?.Trim();
+                if (string.IsNullOrWhiteSpace(column))
+                {
+                    continue;
+                }
+
+                foreach (var tagEntry in columnEntry.Value)
+                {
+                    var tag = tagEntry.Key?.Trim();
+                    var value = tagEntry.Value?.Trim() ?? string.Empty;
+                    if (string.IsNullOrWhiteSpace(tag) || string.IsNullOrWhiteSpace(value))
+                    {
+                        continue;
+                    }
+
+                    fieldDefaults.Add(new MappingFieldDefaultValue(column, tag, value));
+                }
+            }
+
+            var request = new MappingSaveRequest(
+                State.OriginalClientId,
+                NormalizeUpper(State.ClientId),
+                State.OrganizationName?.Trim() ?? string.Empty,
+                NormalizeUpper(State.SenderDomain),
+                NormalizeUpper(State.SenderCompId),
+                string.IsNullOrWhiteSpace(State.TargetCompId) ? "BROKER" : NormalizeUpper(State.TargetCompId),
+                NormalizeUpper(State.TargetSubId),
+                NormalizeUpper(State.OnBehalfOfCompId),
+                NormalizeUpper(State.DeliverToCompId),
+                fields,
+                defaults,
+                fieldDefaults);
+
+            var response = await Http.PostAsJsonAsync("api/map-management/save", request);
+            if (!response.IsSuccessStatusCode)
+            {
+                State.StatusMessage = $"Save failed ({response.StatusCode}).";
+                return;
+            }
+
+            var result = await response.Content.ReadFromJsonAsync<MappingSaveResponse>();
+            if (result is null)
+            {
+                State.StatusMessage = "Save failed: no response.";
+                return;
+            }
+
+            State.StatusMessage = result.StatusMessage;
+            if (!result.Success || result.Mapping is null)
+            {
+                return;
+            }
+
+            ApplyMapping(result.Mapping);
+            State.IsEditing = false;
+            State.HasUnsavedChanges = false;
+            State.SelectedMapping = result.Mapping.ClientId;
+            State.OriginalClientId = result.Mapping.ClientId;
+            await LoadMappingsAsync(updateStatus: false);
+            State.StatusMessage = result.StatusMessage;
+        }
+        catch (Exception ex)
+        {
+            State.StatusMessage = $"Error saving mapping: {ex.Message}";
+        }
+        finally
+        {
+            _isBusy = false;
+        }
+    }
+
+    private async Task CancelAsync()
+    {
+        if (!State.IsEditing)
+        {
+            return;
+        }
+
+        if (!State.HasUnsavedChanges)
+        {
+            await ApplyCancelAsync();
+            return;
+        }
+
+        ShowConfirm(
+            "Confirm Discard",
+            "Discard changes?",
+            ApplyCancelAsync,
+            () =>
+            {
+                State.StatusMessage = "Cancel aborted";
+                return Task.CompletedTask;
+            });
+    }
+
+    private async Task ApplyCancelAsync()
+    {
+        State.IsEditing = false;
+        State.HasUnsavedChanges = false;
+
+        if (!string.IsNullOrWhiteSpace(State.SelectedMapping))
+        {
+            await LoadMappingAsync(State.SelectedMapping);
+        }
+
+        State.StatusMessage = "Cancelled";
+    }
+    private void DeleteMappingAsync()
+    {
+        if (string.IsNullOrWhiteSpace(State.SelectedMapping))
+        {
+            State.StatusMessage = "Please select a mapping to delete";
+            return;
+        }
+
+        var clientId = State.SelectedMapping;
+        ShowConfirm(
+            "Confirm Delete",
+            $"Delete mapping \"{clientId}\"?",
+            () => ConfirmDeleteAsync(clientId),
+            () =>
+            {
+                State.StatusMessage = "Delete cancelled";
+                return Task.CompletedTask;
+            });
+    }
+
+    private Task ConfirmDeleteAsync(string clientId)
+    {
+        if (State.HasDeployedCopy)
+        {
+            ShowConfirm(
+                "Delete Deployed Copy",
+                $"A copy of the \"{clientId}\" map is deployed to the email automation service. Selecting OK will delete all copies (master and deployed). Proceed?",
+                () => ExecuteDeleteAsync(clientId, deleteDeployed: true),
+                () =>
+                {
+                    State.StatusMessage = "Delete cancelled";
+                    return Task.CompletedTask;
+                });
+            return Task.CompletedTask;
+        }
+
+        return ExecuteDeleteAsync(clientId, deleteDeployed: false);
+    }
+
+    private async Task ExecuteDeleteAsync(string clientId, bool deleteDeployed)
+    {
+        _isBusy = true;
+        try
+        {
+            State.StatusMessage = $"Deleting mapping: {clientId}...";
+            var url = $"api/map-management/{Uri.EscapeDataString(clientId)}?deleteDeployed={deleteDeployed.ToString().ToLowerInvariant()}";
+            var response = await Http.DeleteAsync(url);
+            var payload = await response.Content.ReadAsStringAsync();
+            MappingDeleteResponse? result = null;
+            if (!string.IsNullOrWhiteSpace(payload))
+            {
+                try
+                {
+                    result = JsonSerializer.Deserialize<MappingDeleteResponse>(payload, new JsonSerializerOptions
+                    {
+                        PropertyNameCaseInsensitive = true
+                    });
+                }
+                catch
+                {
+                    // fall through and rely on status code/message
+                }
+            }
+
+            if (!response.IsSuccessStatusCode)
+            {
+                var details = result?.StatusMessage ?? payload ?? response.ReasonPhrase ?? "Delete failed.";
+                State.StatusMessage = $"Delete failed ({(int)response.StatusCode}): {details}";
+                return;
+            }
+
+            await LoadMappingsAsync(updateStatus: false);
+            var stillExists = State.MappingOptions.Any(m =>
+                string.Equals(m.ClientId, clientId, StringComparison.OrdinalIgnoreCase));
+
+            if (stillExists && result?.Success == false)
+            {
+                State.StatusMessage = result.StatusMessage;
+                return;
+            }
+
+            if (stillExists)
+            {
+                State.StatusMessage = result?.StatusMessage ?? "Delete failed: mapping still present.";
+                return;
+            }
+
+            State.SelectedMapping = null;
+            State.OriginalClientId = null;
+            State.ClientId = string.Empty;
+            State.OrganizationName = string.Empty;
+            State.SenderDomain = string.Empty;
+            State.OnBehalfOfCompId = string.Empty;
+            State.FieldMappings.Clear();
+            State.IsEditing = false;
+            State.HasUnsavedChanges = false;
+            State.DateCreated = string.Empty;
+            State.DateValidated = string.Empty;
+            State.DateModified = string.Empty;
+            State.EmailAutomationStatus = "Inactive";
+            State.HasDeployedCopy = false;
+            State.StatusMessage = result?.StatusMessage ?? $"Mapping deleted: {clientId}";
+        }
+        catch (Exception ex)
+        {
+            State.StatusMessage = $"Error deleting mapping: {ex.Message}";
+        }
+        finally
+        {
+            _isBusy = false;
+        }
+    }
+
+    private async Task DeployMappingAsync()
+    {
+        if (string.IsNullOrWhiteSpace(State.SelectedMapping))
+        {
+            State.StatusMessage = "Please select a mapping to deploy";
+            return;
+        }
+
+        _isBusy = true;
+        try
+        {
+            var response = await Http.PostAsync($"api/map-management/{Uri.EscapeDataString(State.SelectedMapping)}/deploy", null);
+            var result = await response.Content.ReadFromJsonAsync<MappingDeployResponse>();
+            if (result is null)
+            {
+                State.StatusMessage = "Deploy failed.";
+                return;
+            }
+
+            State.StatusMessage = result.StatusMessage;
+            if (result.Success)
+            {
+                State.EmailAutomationStatus = result.EmailAutomationStatus ?? State.EmailAutomationStatus;
+                State.HasDeployedCopy = true;
+            }
+        }
+        catch (Exception ex)
+        {
+            State.StatusMessage = $"Failed to deploy mapping: {ex.Message}";
+        }
+        finally
+        {
+            _isBusy = false;
+        }
+    }
+
+    private void ValidateMapping()
+    {
+        if (State.SelectedMapping is null || State.IsEditing)
+        {
+            return;
+        }
+
+        Nav.NavigateTo($"/direct-ingestion?clientId={Uri.EscapeDataString(State.SelectedMapping)}");
+    }
+
+    private void AddField()
+    {
+        if (string.IsNullOrWhiteSpace(State.NewFieldName) || string.IsNullOrWhiteSpace(State.NewFieldTag))
+        {
+            State.StatusMessage = "Field name and tag are required";
+            return;
+        }
+
+        if (State.FieldMappings.Any(x => x.ColumnName.Equals(State.NewFieldName, StringComparison.OrdinalIgnoreCase)))
+        {
+            State.StatusMessage = "Field already exists";
+            return;
+        }
+
+        var entry = BuildFieldEntry(State.NewFieldName.Trim(), State.NewFieldTag.Trim());
+        State.FieldMappings.Add(entry);
+        State.NewFieldName = string.Empty;
+        State.NewFieldTag = string.Empty;
+        State.NewFieldTagInput = string.Empty;
+        _hasDependencyDefaultChanges = false;
+        SyncDefaultValuesWithMappings();
+        MarkDirty();
+    }
+
+    private void UpdateField()
+    {
+        if (State.SelectedFieldMapping is null)
+        {
+            State.StatusMessage = "Select a field to update";
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(State.NewFieldName) || string.IsNullOrWhiteSpace(State.NewFieldTag))
+        {
+            State.StatusMessage = "Field name and tag are required";
+            return;
+        }
+
+        var hasFieldChanges = IsFieldDirty;
+        var duplicate = State.FieldMappings.Any(x =>
+            !string.Equals(x.ColumnName, State.SelectedFieldMapping.ColumnName, StringComparison.OrdinalIgnoreCase) &&
+            x.ColumnName.Equals(State.NewFieldName, StringComparison.OrdinalIgnoreCase));
+        if (duplicate)
+        {
+            State.StatusMessage = "Field name already exists";
+            return;
+        }
+
+        var index = GetSelectedFieldIndex();
+        if (index >= 0)
+        {
+            var previousColumn = State.SelectedFieldMapping.ColumnName;
+            var updated = BuildFieldEntry(State.NewFieldName.Trim(), State.NewFieldTag.Trim());
+            if (hasFieldChanges)
+            {
+                State.FieldMappings[index] = updated;
+            }
+            State.SelectedFieldMapping = updated;
+            State.NewFieldTagInput = State.NewFieldTag;
+            State.StatusMessage = hasFieldChanges ? "Field updated" : "Field defaults updated";
+            if (!string.Equals(previousColumn, updated.ColumnName, StringComparison.OrdinalIgnoreCase))
+            {
+                MoveFieldDefaults(previousColumn, updated.ColumnName);
+            }
+            _hasDependencyDefaultChanges = false;
+            SyncDefaultValuesWithMappings();
+            MarkDirty();
+        }
+    }
+
+    private void RemoveField()
+    {
+        if (State.SelectedFieldMapping is null)
+        {
+            return;
+        }
+
+        var index = GetSelectedFieldIndex();
+        if (index >= 0)
+        {
+            var column = State.SelectedFieldMapping.ColumnName;
+            State.FieldMappings.RemoveAt(index);
+            State.SelectedFieldMapping = null;
+            RemoveFieldDefaults(column);
+            _hasDependencyDefaultChanges = false;
+            SyncDefaultValuesWithMappings();
+            MarkDirty();
+        }
+    }
+
+    private void MoveFieldUp()
+    {
+        var index = GetSelectedFieldIndex();
+        if (index <= 0)
+        {
+            return;
+        }
+
+        var item = State.FieldMappings[index];
+        State.FieldMappings.RemoveAt(index);
+        State.FieldMappings.Insert(index - 1, item);
+        State.SelectedFieldMapping = State.FieldMappings[index - 1];
+        MarkDirty();
+    }
+
+    private void MoveFieldDown()
+    {
+        var index = GetSelectedFieldIndex();
+        if (index < 0 || index >= State.FieldMappings.Count - 1)
+        {
+            return;
+        }
+
+        var item = State.FieldMappings[index];
+        State.FieldMappings.RemoveAt(index);
+        State.FieldMappings.Insert(index + 1, item);
+        State.SelectedFieldMapping = State.FieldMappings[index + 1];
+        MarkDirty();
+    }
+
+    private void SelectField(MappingFieldEntry field)
+    {
+        State.SelectedFieldMapping = field;
+        State.NewFieldName = field.ColumnName;
+        State.NewFieldTag = field.Tag;
+        State.NewFieldTagInput = field.Tag;
+        State.FixFieldSuggestions.Clear();
+        State.IsFixFieldSuggestionOpen = false;
+        _hasDependencyDefaultChanges = false;
+    }
+
+    private bool CanAddField
+    {
+        get
+        {
+            if (string.IsNullOrWhiteSpace(State.NewFieldName) || string.IsNullOrWhiteSpace(State.NewFieldTag))
+            {
+                return false;
+            }
+
+            if (State.SelectedFieldMapping is not null && !IsFieldDirty)
+            {
+                return false;
+            }
+
+            return true;
+        }
+    }
+
+    private bool CanUpdateField => State.SelectedFieldMapping is not null && (IsFieldDirty || _hasDependencyDefaultChanges) &&
+                                   !string.IsNullOrWhiteSpace(State.NewFieldName) &&
+                                   !string.IsNullOrWhiteSpace(State.NewFieldTag);
+
+    private bool IsFieldDirty => State.SelectedFieldMapping is null ||
+                                 !string.Equals(State.SelectedFieldMapping.ColumnName, State.NewFieldName, StringComparison.Ordinal) ||
+                                 !string.Equals(State.SelectedFieldMapping.Tag, State.NewFieldTag, StringComparison.OrdinalIgnoreCase);
+
+    private void OnTagInputChanged()
+    {
+        if (_suppressFixFieldSuggestion)
+        {
+            return;
+        }
+
+        State.FixFieldSuggestions.Clear();
+        State.IsFixFieldSuggestionOpen = false;
+
+        var input = State.NewFieldTagInput?.Trim() ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(input))
+        {
+            State.NewFieldTag = string.Empty;
+            return;
+        }
+
+        var numericPrefix = new string(input.TakeWhile(char.IsDigit).ToArray());
+        if (!string.IsNullOrWhiteSpace(numericPrefix))
+        {
+            State.NewFieldTag = numericPrefix;
+            return;
+        }
+
+        State.NewFieldTag = string.Empty;
+
+        if (!char.IsLetter(input[0]))
+        {
+            return;
+        }
+
+        var existingTags = State.FieldMappings
+            .Select(f => f.Tag.Trim())
+            .Where(tag => !string.IsNullOrWhiteSpace(tag))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        var matches = input.Length <= 2
+            ? State.FixFieldOptions
+                .Where(option => !existingTags.Contains(option.Tag) &&
+                                 option.Name.StartsWith(input, StringComparison.OrdinalIgnoreCase))
+                .ToList()
+            : State.FixFieldOptions
+                .Where(option => !existingTags.Contains(option.Tag) &&
+                                 option.Name.Contains(input, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+
+        foreach (var match in matches.Take(20))
+        {
+            State.FixFieldSuggestions.Add(match);
+        }
+
+        State.IsFixFieldSuggestionOpen = State.FixFieldSuggestions.Count > 0;
+        _suggestionIndex = State.IsFixFieldSuggestionOpen ? 0 : -1;
+    }
+
+    private void SelectFixFieldSuggestion(FixFieldOption option)
+    {
+        _suppressFixFieldSuggestion = true;
+        State.NewFieldTag = option.Tag;
+        State.NewFieldTagInput = option.Tag;
+        _suppressFixFieldSuggestion = false;
+        State.IsFixFieldSuggestionOpen = false;
+        State.FixFieldSuggestions.Clear();
+        _suggestionIndex = -1;
+    }
+
+    private void OnTagFocus()
+    {
+        _isTagInputFocused = true;
+    }
+
+    private void OnTagBlur()
+    {
+        _isTagInputFocused = false;
+        FormatTagInput();
+    }
+
+    private void FormatTagInput()
+    {
+        if (string.IsNullOrWhiteSpace(State.NewFieldTagInput))
+        {
+            return;
+        }
+
+        var trimmed = State.NewFieldTagInput.Trim();
+        var numericPrefix = new string(trimmed.TakeWhile(char.IsDigit).ToArray());
+        if (string.IsNullOrWhiteSpace(numericPrefix))
+        {
+            return;
+        }
+
+        State.NewFieldTag = numericPrefix;
+        State.NewFieldTagInput = numericPrefix;
+    }
+
+    private string TagSuffix
+    {
+        get
+        {
+            if (string.IsNullOrWhiteSpace(State.NewFieldTag))
+            {
+                return string.Empty;
+            }
+
+            return State.TagMetadata.TryGetValue(State.NewFieldTag, out var meta) && !string.IsNullOrWhiteSpace(meta.Name)
+                ? $"({meta.Name})"
+                : string.Empty;
+        }
+    }
+
+    private static readonly Dictionary<string, string[]> TagDependencies = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["12"] = new[] { "13" },   // Commission -> CommType
+        ["13"] = new[] { "12" },   // CommType -> Commission
+        ["137"] = new[] { "139", "138" }, // MiscFeeAmt -> MiscFeeType + MiscFeeCurr
+        ["139"] = new[] { "137", "138" }  // MiscFeeType -> MiscFeeAmt + MiscFeeCurr
+    };
+
+    private IReadOnlyList<string> MissingDependencyTags
+    {
+        get
+        {
+            var anchor = NormalizeTagKey(State.NewFieldTag);
+            if (string.IsNullOrWhiteSpace(anchor))
+            {
+                return Array.Empty<string>();
+            }
+
+            if (!TagDependencies.TryGetValue(anchor, out var deps))
+            {
+                return Array.Empty<string>();
+            }
+            var normalized = deps
+                .Select(NormalizeTagKey)
+                .Where(tag => !string.IsNullOrWhiteSpace(tag))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            if (UseFieldDefaultsForAnchor)
+            {
+                return normalized;
+            }
+
+            return normalized
+                .Where(tag => !IsTagMapped(tag))
+                .ToList();
+        }
+    }
+
+    private IReadOnlyList<string> DependencyTagDisplays =>
+        MissingDependencyTags.Select(GetTagDisplay).ToList();
+
+    private string DependencyAnchorTagDisplay =>
+        string.IsNullOrWhiteSpace(State.NewFieldTag) ? "tag" : GetTagDisplay(NormalizeTagKey(State.NewFieldTag));
+
+    private bool IsTagMapped(string tag) =>
+        State.FieldMappings.Any(f => string.Equals(NormalizeTagKey(f.Tag), tag, StringComparison.OrdinalIgnoreCase));
+
+    private IReadOnlyList<string> GetDependencyTagsForField(MappingFieldEntry field)
+    {
+        var tag = NormalizeTagKey(field.Tag);
+        if (string.IsNullOrWhiteSpace(tag))
+        {
+            return Array.Empty<string>();
+        }
+
+        if (!TagDependencies.TryGetValue(tag, out var deps) || deps.Length == 0)
+        {
+            return Array.Empty<string>();
+        }
+
+        return deps
+            .Select(NormalizeTagKey)
+            .Where(dep => !string.IsNullOrWhiteSpace(dep))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
+    private IReadOnlyList<string> GetMissingDependenciesForField(MappingFieldEntry field, IReadOnlyList<string> deps)
+    {
+        if (deps.Count == 0)
+        {
+            return Array.Empty<string>();
+        }
+
+        var missing = new List<string>();
+        foreach (var dep in deps)
+        {
+            if (IsTagMapped(dep))
+            {
+                continue;
+            }
+
+            var hasDefault = false;
+            if (TryGetFieldDefaultValue(field.ColumnName, dep, out var fieldDefault) && !string.IsNullOrWhiteSpace(fieldDefault))
+            {
+                hasDefault = true;
+            }
+            else if (State.DefaultTagValues.TryGetValue(dep, out var globalDefault) && !string.IsNullOrWhiteSpace(globalDefault))
+            {
+                hasDefault = true;
+            }
+
+            if (!hasDefault)
+            {
+                missing.Add(dep);
+            }
+        }
+
+        return missing;
+    }
+
+    private string GetDependencyTooltip(IReadOnlyList<string> deps) =>
+        deps.Count == 0
+            ? string.Empty
+            : $"Depends on tags: {string.Join(", ", deps.Select(GetTagDisplay))}";
+
+    private string GetMissingDependencyTooltip(IReadOnlyList<string> deps) =>
+        deps.Count == 0
+            ? string.Empty
+            : $"Missing dependent tags: {string.Join(", ", deps.Select(GetTagDisplay))}";
+
+    private static string NormalizeTagKey(string? tag)
+    {
+        if (string.IsNullOrWhiteSpace(tag))
+        {
+            return string.Empty;
+        }
+
+        var digits = new string(tag.Trim().Where(char.IsDigit).ToArray());
+        return digits;
+    }
+
+    private string GetTagDisplay(string tag)
+    {
+        var trimmed = NormalizeTagKey(tag);
+        if (string.IsNullOrWhiteSpace(trimmed))
+        {
+            return "Tag";
+        }
+
+        if (State.TagMetadata.TryGetValue(trimmed, out var meta) && !string.IsNullOrWhiteSpace(meta.Name))
+        {
+            return $"Tag {trimmed} ({meta.Name})";
+        }
+
+        return $"Tag {trimmed}";
+    }
+
+    private string GetDefaultValue(string tag)
+    {
+        var key = NormalizeTagKey(tag);
+        if (string.IsNullOrWhiteSpace(key))
+        {
+            return string.Empty;
+        }
+
+        if (UseFieldDefaultsForAnchor && TryGetFieldDefaultValue(State.NewFieldName, key, out var value))
+        {
+            return value;
+        }
+
+        if (UseFieldDefaultsForAnchor && UseBlankDefaultsForAnchor)
+        {
+            return string.Empty;
+        }
+
+        return State.DefaultTagValues.TryGetValue(key, out var global) ? global : string.Empty;
+    }
+
+    private void SetDefaultValue(string tag, string? value)
+    {
+        var key = NormalizeTagKey(tag);
+        if (string.IsNullOrWhiteSpace(key))
+        {
+            return;
+        }
+
+        if (UseFieldDefaultsForAnchor && !string.IsNullOrWhiteSpace(State.NewFieldName))
+        {
+            SetFieldDefaultValue(State.NewFieldName, key, value);
+            if (State.SelectedFieldMapping is not null)
+            {
+                _hasDependencyDefaultChanges = true;
+            }
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            State.DefaultTagValues.Remove(key);
+        }
+        else
+        {
+            State.DefaultTagValues[key] = value.Trim();
+        }
+
+        if (State.SelectedFieldMapping is not null)
+        {
+            _hasDependencyDefaultChanges = true;
+        }
+
+        MarkDirty();
+    }
+
+    private void SyncDefaultValuesWithMappings()
+    {
+        if (State.DefaultTagValues.Count == 0)
+        {
+            SyncFieldDefaultValuesWithMappings();
+            return;
+        }
+
+        var mappedTags = State.FieldMappings
+            .Select(f => NormalizeTagKey(f.Tag))
+            .Where(tag => !string.IsNullOrWhiteSpace(tag))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        var toRemove = State.DefaultTagValues.Keys
+            .Where(tag => mappedTags.Contains(NormalizeTagKey(tag)))
+            .ToList();
+
+        foreach (var tag in toRemove)
+        {
+            State.DefaultTagValues.Remove(tag);
+        }
+
+        SyncFieldDefaultValuesWithMappings();
+    }
+
+    private void SyncFieldDefaultValuesWithMappings()
+    {
+        if (State.FieldDefaultTagValues.Count == 0)
+        {
+            return;
+        }
+
+        var mappedColumns = State.FieldMappings
+            .Select(f => f.ColumnName?.Trim())
+            .Where(name => !string.IsNullOrWhiteSpace(name))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        var toRemove = State.FieldDefaultTagValues.Keys
+            .Where(column => !mappedColumns.Contains(column))
+            .ToList();
+
+        foreach (var column in toRemove)
+        {
+            State.FieldDefaultTagValues.Remove(column);
+        }
+    }
+
+    private bool UseFieldDefaultsForAnchor
+    {
+        get
+        {
+            var anchor = NormalizeTagKey(State.NewFieldTag);
+            return string.Equals(anchor, "137", StringComparison.OrdinalIgnoreCase) ||
+                   string.Equals(anchor, "139", StringComparison.OrdinalIgnoreCase);
+        }
+    }
+
+    private bool UseBlankDefaultsForAnchor =>
+        string.Equals(NormalizeTagKey(State.NewFieldTag), "137", StringComparison.OrdinalIgnoreCase);
+
+    private bool TryGetFieldDefaultValue(string? columnName, string tag, out string value)
+    {
+        value = string.Empty;
+        if (string.IsNullOrWhiteSpace(columnName))
+        {
+            return false;
+        }
+
+        var column = columnName.Trim();
+        if (!State.FieldDefaultTagValues.TryGetValue(column, out var tagDefaults))
+        {
+            return false;
+        }
+
+        if (tagDefaults.TryGetValue(tag, out var direct) && !string.IsNullOrWhiteSpace(direct))
+        {
+            value = direct;
+            return true;
+        }
+
+        foreach (var kvp in tagDefaults)
+        {
+            if (NormalizeTagKey(kvp.Key) == tag && !string.IsNullOrWhiteSpace(kvp.Value))
+            {
+                value = kvp.Value;
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private void SetFieldDefaultValue(string columnName, string tag, string? value)
+    {
+        var column = columnName?.Trim();
+        if (string.IsNullOrWhiteSpace(column))
+        {
+            return;
+        }
+
+        if (!State.FieldDefaultTagValues.TryGetValue(column, out var tagDefaults))
+        {
+            tagDefaults = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            State.FieldDefaultTagValues[column] = tagDefaults;
+        }
+
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            tagDefaults.Remove(tag);
+            if (tagDefaults.Count == 0)
+            {
+                State.FieldDefaultTagValues.Remove(column);
+            }
+        }
+        else
+        {
+            tagDefaults[tag] = value.Trim();
+        }
+
+        MarkDirty();
+    }
+
+    private void RemoveFieldDefaults(string? columnName)
+    {
+        var column = columnName?.Trim();
+        if (string.IsNullOrWhiteSpace(column))
+        {
+            return;
+        }
+
+        State.FieldDefaultTagValues.Remove(column);
+    }
+
+    private void MoveFieldDefaults(string? fromColumn, string? toColumn)
+    {
+        var from = fromColumn?.Trim();
+        var to = toColumn?.Trim();
+        if (string.IsNullOrWhiteSpace(from) || string.IsNullOrWhiteSpace(to))
+        {
+            return;
+        }
+
+        if (!State.FieldDefaultTagValues.TryGetValue(from, out var existing))
+        {
+            return;
+        }
+
+        State.FieldDefaultTagValues.Remove(from);
+        if (!State.FieldDefaultTagValues.TryGetValue(to, out var target))
+        {
+            State.FieldDefaultTagValues[to] = existing;
+            return;
+        }
+
+        foreach (var kvp in existing)
+        {
+            target[kvp.Key] = kvp.Value;
+        }
+    }
+
+    private async Task OnTagKeyDown(KeyboardEventArgs e)
+    {
+        await HandleTagSuggestKeyAsync(e.Key);
+    }
+
+    [JSInvokable]
+    public async Task HandleTagSuggestKeyAsync(string? key)
+    {
+        if (string.IsNullOrWhiteSpace(key))
+        {
+            return;
+        }
+
+        if (!State.IsFixFieldSuggestionOpen || State.FixFieldSuggestions.Count == 0)
+        {
+            await InvokeAsync(StateHasChanged);
+            return;
+        }
+
+        switch (key)
+        {
+            case "ArrowDown":
+                _suggestionIndex = _suggestionIndex < 0
+                    ? 0
+                    : Math.Min(_suggestionIndex + 1, State.FixFieldSuggestions.Count - 1);
+                break;
+            case "ArrowUp":
+                _suggestionIndex = _suggestionIndex <= 0
+                    ? State.FixFieldSuggestions.Count - 1
+                    : _suggestionIndex - 1;
+                break;
+            case "Enter":
+                if (_suggestionIndex >= 0 && _suggestionIndex < State.FixFieldSuggestions.Count)
+                {
+                    SelectFixFieldSuggestion(State.FixFieldSuggestions[_suggestionIndex]);
+                }
+                break;
+            case "Escape":
+                State.IsFixFieldSuggestionOpen = false;
+                State.FixFieldSuggestions.Clear();
+                _suggestionIndex = -1;
+                break;
+            default:
+                return;
+        }
+
+        await InvokeAsync(StateHasChanged);
+        if (State.IsFixFieldSuggestionOpen)
+        {
+            await JS.InvokeVoidAsync("fixflowTagSuggest.ensureActiveVisible");
+        }
+    }
+
+    private void ShowConfirm(
+        string title,
+        string message,
+        Func<Task> yesAction,
+        Func<Task>? noAction = null,
+        string confirmText = "OK",
+        string cancelText = "Cancel")
+    {
+        _confirmTitle = title;
+        _confirmMessage = message;
+        _confirmConfirmText = confirmText;
+        _confirmCancelText = cancelText;
+        _confirmYesAction = yesAction;
+        _confirmNoAction = noAction;
+        _showConfirm = true;
+        _ = InvokeAsync(StateHasChanged);
+    }
+
+    private async Task ConfirmYes()
+    {
+        _showConfirm = false;
+        var action = _confirmYesAction;
+        _confirmYesAction = null;
+        _confirmNoAction = null;
+        _ = InvokeAsync(StateHasChanged);
+        if (action != null)
+        {
+            await action();
+        }
+    }
+
+    private async Task ConfirmNo()
+    {
+        _showConfirm = false;
+        var action = _confirmNoAction;
+        _confirmYesAction = null;
+        _confirmNoAction = null;
+        _ = InvokeAsync(StateHasChanged);
+        if (action != null)
+        {
+            await action();
+        }
+    }
+
+    private void OnClientIdChanged()
+    {
+        State.ClientId = NormalizeUpper(State.ClientId);
+        MarkDirty();
+    }
+
+    private void OnOrganizationNameChanged()
+    {
+        State.OrganizationName = string.IsNullOrWhiteSpace(State.OrganizationName)
+            ? string.Empty
+            : State.OrganizationName.ToUpperInvariant();
+        MarkDirty();
+    }
+
+    private void OnSenderDomainChanged()
+    {
+        State.SenderDomain = NormalizeUpper(State.SenderDomain);
+        MarkDirty();
+    }
+
+    private void OnOnBehalfOfCompChanged()
+    {
+        State.OnBehalfOfCompId = NormalizeUpper(State.OnBehalfOfCompId);
+        MarkDirty();
+    }
+
+    private void MarkDirty()
+    {
+        if (_suppressChangeTracking)
+        {
+            return;
+        }
+
+        State.HasUnsavedChanges = true;
+    }
+
+    private int GetSelectedFieldIndex()
+    {
+        if (State.SelectedFieldMapping is null)
+        {
+            return -1;
+        }
+
+        var selected = State.SelectedFieldMapping;
+        for (var i = 0; i < State.FieldMappings.Count; i++)
+        {
+            var item = State.FieldMappings[i];
+            if (string.Equals(item.ColumnName, selected.ColumnName, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(item.Tag, selected.Tag, StringComparison.OrdinalIgnoreCase))
+            {
+                return i;
+            }
+        }
+
+        return -1;
+    }
+
+    private bool IsSelected(MappingOption option) =>
+        State.SelectedMapping is not null && string.Equals(State.SelectedMapping, option.ClientId, StringComparison.OrdinalIgnoreCase);
+
+    private bool IsSelected(MappingFieldEntry field) =>
+        State.SelectedFieldMapping is not null &&
+        string.Equals(State.SelectedFieldMapping.ColumnName, field.ColumnName, StringComparison.OrdinalIgnoreCase) &&
+        string.Equals(State.SelectedFieldMapping.Tag, field.Tag, StringComparison.OrdinalIgnoreCase);
+
+    private MappingFieldEntry BuildFieldEntry(string columnName, string tag)
+    {
+        var tagDisplay = FormatTagDisplay(tag);
+        var tagLevel = GetTagLevel(tag);
+        return new MappingFieldEntry(columnName, tag, tagDisplay, tagLevel);
+    }
+
+    private string FormatTagDisplay(string tag)
+    {
+        var trimmed = tag.Trim();
+        if (State.TagMetadata.TryGetValue(trimmed, out var meta) && !string.IsNullOrWhiteSpace(meta.Name))
+        {
+            return $"Tag {trimmed} ({meta.Name})";
+        }
+
+        return string.IsNullOrWhiteSpace(trimmed) ? string.Empty : $"Tag {trimmed}";
+    }
+
+    private string GetTagLevel(string tag)
+    {
+        var trimmed = tag.Trim();
+        if (State.TagMetadata.TryGetValue(trimmed, out var meta) && !string.IsNullOrWhiteSpace(meta.Level))
+        {
+            return meta.Level;
+        }
+
+        return "Unknown";
+    }
+
+    private static string TagLevelClass(string level)
+    {
+        if (string.Equals(level, "NoAllocs", StringComparison.OrdinalIgnoreCase))
+        {
+            return "noallocs";
+        }
+
+        if (string.Equals(level, "NoMiscFees", StringComparison.OrdinalIgnoreCase))
+        {
+            return "nomiscfees";
+        }
+
+        if (string.Equals(level, "Header", StringComparison.OrdinalIgnoreCase))
+        {
+            return "header";
+        }
+
+        return "unknown";
+    }
+
+    private static string NormalizeUpper(string? value)
+    {
+        return string.IsNullOrWhiteSpace(value) ? string.Empty : value.Trim().ToUpperInvariant();
+    }
+
+    private bool IsDeploySelectionReady => !State.IsEditing && State.SelectedMapping != null;
+    private bool HasSenderDomain => !string.IsNullOrWhiteSpace(State.SenderDomain);
+
+    private string AutomateTooltip =>
+        IsDeploySelectionReady && !HasSenderDomain
+            ? "Enter a sender domain to enable email automation"
+            : string.Empty;
+
+    private string SenderDomainWarning
+    {
+        get
+        {
+            if (!State.IsEditing)
+            {
+                return string.Empty;
+            }
+
+            var senderDomain = NormalizeUpper(State.SenderDomain);
+            if (string.IsNullOrWhiteSpace(senderDomain))
+            {
+                return string.Empty;
+            }
+
+            var currentId = NormalizeUpper(State.ClientId);
+            foreach (var option in State.MappingOptions)
+            {
+                if (option is null)
+                {
+                    continue;
+                }
+
+                if (string.Equals(NormalizeUpper(option.ClientId), currentId, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                var optionDomain = NormalizeUpper(option.SenderDomain);
+                if (string.IsNullOrWhiteSpace(optionDomain))
+                {
+                    continue;
+                }
+
+                if (string.Equals(optionDomain, senderDomain, StringComparison.OrdinalIgnoreCase))
+                {
+                    return $"Sender domain already used by {option.ClientId}.";
+                }
+            }
+
+            return string.Empty;
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (_tagInputDotNetRef is not null)
+        {
+            await JS.InvokeVoidAsync("fixflowTagSuggest.unregister");
+        }
+
+        _tagInputDotNetRef?.Dispose();
+        _tagInputDotNetRef = null;
+    }
+
+}
