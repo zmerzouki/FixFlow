@@ -39,7 +39,17 @@ builder.Services.AddScoped(sp =>
     return new HttpClient { BaseAddress = new Uri(baseUri) };
 });
 builder.Services.AddSingleton<ExcelParser>();
-builder.Services.AddSingleton(sp => sp.GetRequiredService<IConfiguration>().GetSection("Fix").Get<FixConfig>() ?? new FixConfig());
+builder.Services.AddSingleton(sp =>
+{
+    var configuration = sp.GetRequiredService<IConfiguration>();
+    var fixConfig = configuration.GetSection("Fix").Get<FixConfig>() ?? new FixConfig();
+    if (string.IsNullOrWhiteSpace(fixConfig.SessionQualifier))
+    {
+        fixConfig.SessionQualifier = configuration["FixSessionQualifiers:Web"] ?? "FixFlowWeb";
+    }
+
+    return fixConfig;
+});
 builder.Services.AddSingleton(sp =>
 {
     var logger = sp.GetRequiredService<ILogger<FixMappingRepository>>();

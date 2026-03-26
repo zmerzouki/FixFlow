@@ -204,12 +204,32 @@ public static class FixValueNormalizer
 
     private static string NormalizeSide(string value)
     {
-        value = value.ToUpperInvariant();
+        var trimmed = value.Trim();
+        if (trimmed.Length == 0)
+        {
+            return string.Empty;
+        }
+
+        if (int.TryParse(trimmed, NumberStyles.Integer, CultureInfo.InvariantCulture, out _))
+        {
+            if (trimmed.Length == 1)
+            {
+                return trimmed;
+            }
+
+            throw new InvalidOperationException($"Side (tag 54) has an invalid value: {trimmed}");
+        }
+
+        value = trimmed.ToUpperInvariant();
         if (value == "BUY" || value == "B" || value == "BOUGHT" || value.Contains("COVER")) return "1";
         if (value == "SELL" || value == "S" || value == "SOLD" || value == "LONG") return "2";
-        if (value.Contains("SSE") || value.Contains("EXEMPT") || value.Contains("SHORT EXEMPT")) return "6";
+        if (value.Contains("BUY") && value.Contains("MINUS")) return "3";
+        if (value.Contains("SELL") && value.Contains("PLUS")) return "4";
         if (value.Contains("SHORT")) return "5";
-        return "1";
+        if (value.Contains("SSE") || value.Contains("EXEMPT") || value.Contains("SHORT EXEMPT")) return "6";
+        if (value.Contains("CROSS")) return "8";
+        if (value == "CS" || (value.Contains("CROSS") && value.Contains("SHORT"))) return "9";
+        throw new InvalidOperationException($"Side (tag 54) has an invalid value: {trimmed}");
     }
 
     private static bool IsSideEnumValue(string value) =>
@@ -418,8 +438,7 @@ public static class FixValueNormalizer
 
                 if (!decimal.TryParse(trimmed, NumberStyles.Number, CultureInfo.InvariantCulture, out _))
                 {
-                    issues.Add(new NumericFieldIssue(kvp.Key, tag, trimmed));
-                    break;
+                    issues.Add(new NumericFieldIssue(trade.Id, kvp.Key, tag, trimmed));
                 }
             }
         }
@@ -453,4 +472,4 @@ public static class FixValueNormalizer
     }
 }
 
-public record NumericFieldIssue(string ColumnKey, int Tag, string SampleValue);
+public record NumericFieldIssue(string TradeId, string ColumnKey, int Tag, string SampleValue);

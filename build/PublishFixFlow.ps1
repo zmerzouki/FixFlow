@@ -155,9 +155,9 @@ try {
             }
         }
 
-        Ensure-Qualifier "Web" "FixFlowWeb"
-        Ensure-Qualifier "Client" "FixFlowClient"
-        Ensure-Qualifier "Service" "FixFlowService"
+        Ensure-Qualifier "Web" "FIXFLOWWEB"
+        Ensure-Qualifier "Client" "FIXFLOWCLIENT"
+        Ensure-Qualifier "Service" "FIXFLOWSERVICE"
 
         if ($changed) {
             $json | ConvertTo-Json -Depth 32 | Set-Content -Path $sharedAppSettings

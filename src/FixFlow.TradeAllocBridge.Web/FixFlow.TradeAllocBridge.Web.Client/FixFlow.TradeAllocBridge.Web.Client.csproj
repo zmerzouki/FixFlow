@@ -6,6 +6,8 @@
     <Nullable>enable</Nullable>
     <NoDefaultLaunchSettingsFile>true</NoDefaultLaunchSettingsFile>
     <StaticWebAssetProjectMode>Default</StaticWebAssetProjectMode>
+    <CompressionEnabled>false</CompressionEnabled>
+    <BlazorEnableCompression>false</BlazorEnableCompression>
   </PropertyGroup>
 
   <ItemGroup>

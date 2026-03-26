@@ -5,6 +5,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Input;
@@ -21,6 +22,13 @@ namespace FixFlow.TradeAllocBridge.WPF.ViewModels
 {
     public class AllocationProcessorViewModel : INotifyPropertyChanged
     {
+        private static readonly Regex InvalidValueRegex = new(
+            @"^(?<field>.+?) has an invalid value: (?<value>.+)$",
+            RegexOptions.Compiled | RegexOptions.IgnoreCase);
+        private static readonly Regex NumericIssueRegex = new(
+            @"^Unexpected non-numeric value\(s\) found for numeric FIX fields: (?<detail>.+)\.$",
+            RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
         private readonly ExcelParser _excelParser;
         private readonly FixApp _fixApp;
         private readonly FixEngine _fixEngine;
@@ -666,21 +674,58 @@ namespace FixFlow.TradeAllocBridge.WPF.ViewModels
                     return;
                 }
 
-                var numericIssues = FixValueNormalizer.FindNumericFieldIssues(trades, mapping);
-                if (numericIssues.Count > 0)
+                var fieldIssuesByTrade = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+
+                void AddFieldIssue(string tradeId, string error)
                 {
-                    var detail = string.Join(", ",
-                        numericIssues.Select(issue =>
-                            $"{FixValueNormalizer.FormatColumnLabel(issue.ColumnKey)} (tag {issue.Tag}) = '{issue.SampleValue}'"));
-                    var message = EnsureInvalidEquityNotice($"Unexpected non-numeric value(s) found for numeric FIX fields: {detail}.");
-                    StatusMessage = message;
-                    ResultFailureMessage = message;
-                    ResultMessage = message;
-                    FailedAllocationsCount = eligibleTrades;
-                    ProcessedTradesCount = 0;
-                    ShowResults = true;
-                    ProcessProgress = 100;
-                    return;
+                    if (string.IsNullOrWhiteSpace(tradeId) || string.IsNullOrWhiteSpace(error))
+                    {
+                        return;
+                    }
+
+                    if (!fieldIssuesByTrade.TryGetValue(tradeId, out var errors))
+                    {
+                        errors = new List<string>();
+                        fieldIssuesByTrade[tradeId] = errors;
+                    }
+
+                    if (!errors.Contains(error, StringComparer.OrdinalIgnoreCase))
+                    {
+                        errors.Add(error);
+                    }
+                }
+
+                var numericIssues = FixValueNormalizer.FindNumericFieldIssues(trades, mapping);
+                foreach (var issue in numericIssues)
+                {
+                    AddFieldIssue(
+                        issue.TradeId,
+                        $"Unexpected non-numeric value(s) found for numeric FIX fields: {FixValueNormalizer.FormatColumnLabel(issue.ColumnKey)} (tag {issue.Tag}) = '{issue.SampleValue}'.");
+                }
+
+                foreach (var trade in trades)
+                {
+                    foreach (var entry in mapping.TradeAllocations)
+                    {
+                        if (!FixValueNormalizer.TryParseTagNumber(entry.Value, out var tag))
+                        {
+                            continue;
+                        }
+
+                        if (!trade.Fields.TryGetValue(entry.Key, out var rawValue) || string.IsNullOrWhiteSpace(rawValue))
+                        {
+                            continue;
+                        }
+
+                        try
+                        {
+                            _ = FixValueNormalizer.Normalize(tag, rawValue, trade.Fields);
+                        }
+                        catch (Exception ex)
+                        {
+                            AddFieldIssue(trade.Id, ex.Message);
+                        }
+                    }
                 }
 
                 string ResolveSymbolValue(TradeRecord trade)
@@ -694,8 +739,15 @@ namespace FixFlow.TradeAllocBridge.WPF.ViewModels
                     return hasSecurityIdMapping ? "NA" : string.Empty;
                 }
 
+                var disableAllocationMerge = mapping.DisableAllocationMerge;
+
                 string ResolveGroupKey(TradeRecord trade)
                 {
+                    if (disableAllocationMerge)
+                    {
+                        return $"ROW:{trade.Id}";
+                    }
+
                     var sideValue = GetFieldValue(trade, sideColumn);
                     if (hasSecurityIdMapping)
                     {
@@ -712,6 +764,11 @@ namespace FixFlow.TradeAllocBridge.WPF.ViewModels
 
                 string ResolveGroupDisplay(TradeRecord trade)
                 {
+                    if (disableAllocationMerge)
+                    {
+                        return ResolveSymbolValue(trade);
+                    }
+
                     if (hasSecurityIdMapping)
                     {
                         var secIdValue = GetFieldValue(trade, securityIdColumn);
@@ -722,6 +779,27 @@ namespace FixFlow.TradeAllocBridge.WPF.ViewModels
                     }
 
                     return ResolveSymbolValue(trade);
+                }
+
+                string BuildMergeFailureMessage(int groupTotal, string side, string display, IEnumerable<string> tags)
+                {
+                    if (disableAllocationMerge)
+                    {
+                        return $"{groupTotal} allocation(s) failed to process. Missing required value(s): {string.Join(", ", tags)}.";
+                    }
+
+                    return $"{groupTotal} out of {AllocationsSubmittedCount} allocations identified for group trade {side}/{display} failed to merge because it is missing required value(s): {string.Join(", ", tags)}. Allocations processing cancelled.";
+                }
+
+                string BuildSkippedSendMessage(int groupTotal, string side, string symbol)
+                {
+                    if (disableAllocationMerge)
+                    {
+                        return $"Allocation {side}/{symbol} was built but cannot be sent because other allocations have error(s). Allocations processing cancelled.";
+                    }
+
+                    var failedAllocationsCount = totalTrades - groupTotal;
+                    return $"{groupTotal} out of {AllocationsSubmittedCount} allocations identified for group trade {side}/{symbol} were successfully merged. Fix message cannot be sent because {failedAllocationsCount} trades have error(s). Allocations processing cancelled.";
                 }
 
                 bool IsMissing(TradeRecord trade, string? column, bool required = true) =>
@@ -756,16 +834,29 @@ namespace FixFlow.TradeAllocBridge.WPF.ViewModels
                     _logger.LogWarning(missingRequiredMessage);
                 }
 
-                var validTrades = trades.Where(t => !missingTrades.Contains(t)).ToList();
-                ProcessedTradesCount = validTrades.Count;
+                var invalidFieldTrades = trades
+                    .Where(t => fieldIssuesByTrade.ContainsKey(t.Id))
+                    .Except(missingTrades)
+                    .ToList();
+
+                var validTrades = trades
+                    .Where(t => !missingTrades.Contains(t) && !fieldIssuesByTrade.ContainsKey(t.Id))
+                    .ToList();
+                ProcessedTradesCount = eligibleTrades - missingTrades.Count;
 
                 if (validTrades.Count == 0)
                 {
+                    FailedAllocationsCount = missingTrades.Count + invalidFieldTrades.Count;
                     SuccessfulAllocationsCount = 0;
                     ShowResults = true;
                     ProcessProgress = 100;
                     ResultSuccessMessage = string.Empty;
-                    ResultFailureMessage = EnsureInvalidEquityNotice(missingRequiredMessage ?? "No valid allocations to process.");
+                    var fieldIssueSummary = invalidFieldTrades.Any()
+                        ? SummarizeErrors(fieldIssuesByTrade.Values.SelectMany(v => v))
+                        : null;
+                    ResultFailureMessage = EnsureInvalidEquityNotice(string.Join(" ", new[] { missingRequiredMessage, fieldIssueSummary }
+                        .Where(m => !string.IsNullOrWhiteSpace(m))
+                        .DefaultIfEmpty("No valid allocations to process.")));
                     ResultMessage = ResultFailureMessage;
                     return;
                 }
@@ -893,14 +984,57 @@ namespace FixFlow.TradeAllocBridge.WPF.ViewModels
                     var meta = groupMeta.TryGetValue(kvp.Key, out var details)
                         ? details
                         : new { Side = string.Empty, Symbol = string.Empty, Display = string.Empty };
-                    var message =
-                        $"{groupTotal} out of {AllocationsSubmittedCount} allocations identified for group trade {meta.Side}/{meta.Display} failed to merge because it is missing required value(s): {string.Join(", ", kvp.Value)}. Allocations processing cancelled.";
+                    var message = BuildMergeFailureMessage(groupTotal, meta.Side, meta.Display, kvp.Value);
                     AddGroupError(kvp.Key, message);
                 }
 
                 var fixBuilderLogger = _loggerFactory.CreateLogger<FixMessageBuilder>();
 
                 var fixBuilder = new FixMessageBuilder(mapping, _appConfig.Fix, fixBuilderLogger);
+
+                foreach (var trade in invalidFieldTrades)
+                {
+                    var allocId = fixBuilder.NextAllocId();
+                    var side = GetFieldValue(trade, sideColumn);
+                    var symbol = ResolveSymbolValue(trade);
+                    var groupKey = $"INVALID:{trade.Id}";
+                    var groupTradeDate = ResolveTradeDate(new[] { trade }, tradeDateColumn);
+                    var reportAllocId = FormatAllocId(allocId, groupTradeDate);
+                    allocIdToGroupKey[allocId] = groupKey;
+
+                    var issues = fieldIssuesByTrade.TryGetValue(trade.Id, out var tradeIssues)
+                        ? tradeIssues
+                        : new List<string>();
+                    foreach (var issue in issues)
+                    {
+                        AddGroupError(groupKey, issue);
+                    }
+
+                    var errorMessage = SummarizeErrors(issues);
+
+                    FailedAllocationsCount++;
+                    GeneratedMessages.Add(new FixMessageResult
+                    {
+                        AllocId = allocId,
+                        Symbol = symbol,
+                        Side = side,
+                        TradeCount = 1,
+                        RawFix = string.Empty,
+                        Status = "Failed",
+                        ErrorMessage = errorMessage,
+                        Timestamp = DateTime.UtcNow
+                    });
+                    reportEntries.Add(new ValidationResult(
+                        DateTime.UtcNow.ToString("o"),
+                        mapping.ClientId ?? string.Empty,
+                        reportAllocId,
+                        side,
+                        symbol,
+                        "Failed",
+                        string.Empty,
+                        string.Empty
+                    ));
+                }
 
                 int groupIndex = 0;
                 foreach (var symbolGroup in groupedBySymbolAndSide)
@@ -960,7 +1094,7 @@ namespace FixFlow.TradeAllocBridge.WPF.ViewModels
                     ProcessProgress = 50 + (groupIndex * 50 / groupedBySymbolAndSide.Count);
                 }
 
-                bool canSendFixMessages = !IsDryRun && !missingTrades.Any() && buildFailures == 0;
+                bool canSendFixMessages = !IsDryRun && !missingTrades.Any() && !invalidFieldTrades.Any() && buildFailures == 0;
 
                 foreach (var prepared in preparedMessages)
                 {
@@ -1037,9 +1171,7 @@ namespace FixFlow.TradeAllocBridge.WPF.ViewModels
                         if (!groupErrors.ContainsKey(groupKey))
                         {
                             var groupTotal = groupTotals.TryGetValue(groupKey, out var count) ? count : tradeCount;
-                            var failedAllocationsCount = totalTrades - groupTotal;
-                            var cancelMessage =
-                                $"{groupTotal} out of {AllocationsSubmittedCount} allocations identified for group trade {side}/{symbol} were successfully merged. Fix message cannot be sent because {failedAllocationsCount} trades have error(s). Allocations processing cancelled.";
+                            var cancelMessage = BuildSkippedSendMessage(groupTotal, side, symbol);
                             AddGroupError(groupKey, cancelMessage);
                         }
                     }
@@ -1112,7 +1244,10 @@ namespace FixFlow.TradeAllocBridge.WPF.ViewModels
                 SuccessfulAllocationsCount = Math.Max(eligibleTrades - FailedAllocationsCount, SuccessfulAllocationsCount);
 
                 ProcessProgress = 100;
-                var successMessage = $"{validTrades.Count} out of {AllocationsSubmittedCount} allocations successfully processed and merged across {groupedBySymbolAndSide.Count} allocation group(s).";
+                var generatedFixMessages = preparedMessages.Count;
+                var successMessage = disableAllocationMerge
+                    ? $"{SuccessfulAllocationsCount} out of {AllocationsSubmittedCount} allocations successfully processed individually with merge disabled. {generatedFixMessages} Fix allocation message(s) generated."
+                    : $"{SuccessfulAllocationsCount} out of {AllocationsSubmittedCount} allocations successfully processed and merged across {generatedFixMessages} allocation group(s).";
                 if (!IsDryRun && successfulFixMessages > 0)
                 {
                     successMessage = $"{successMessage} {successfulFixMessages} Fix message(s) successfully sent to {targetComp}.";
@@ -1123,7 +1258,7 @@ namespace FixFlow.TradeAllocBridge.WPF.ViewModels
                     fixSendFailureMessage = $"{failedFixMessages} Fix message(s) failed to send.";
                 }
                 var groupErrorSummary = groupErrors.Count > 0
-                    ? string.Join(" | ", groupErrors.Values.SelectMany(v => v).Distinct())
+                    ? SummarizeErrors(groupErrors.Values.SelectMany(v => v))
                     : null;
                 var failureMessage = string.Join(" ", new[] { missingRequiredMessage, fixSendFailureMessage, groupErrorSummary }
                     .Where(m => !string.IsNullOrWhiteSpace(m)));
@@ -1145,7 +1280,7 @@ namespace FixFlow.TradeAllocBridge.WPF.ViewModels
                     SelectedFilePath = null;
                 }
 
-                var hasProcessingErrors = missingTrades.Any() || buildFailures > 0 || failedFixMessages > 0 || groupErrors.Count > 0;
+                var hasProcessingErrors = missingTrades.Any() || invalidFieldTrades.Any() || buildFailures > 0 || failedFixMessages > 0 || groupErrors.Count > 0;
                 string ResolveErrorDetails(ValidationResult entry)
                 {
                     if (groupErrors.Count == 0)
@@ -1171,23 +1306,23 @@ namespace FixFlow.TradeAllocBridge.WPF.ViewModels
 
                 if (IsDryRun)
                 {
-                    var dryRunStatus = hasProcessingErrors ? "Failed" : "Valid. Not Sent";
                     foreach (var entry in reportEntries)
                     {
                         var errorDetails = ResolveErrorDetails(entry);
                         var sideDisplay = FixValueNormalizer.FormatSideDisplay(entry.Side);
+                        var isValid = string.IsNullOrWhiteSpace(errorDetails);
                         _validationReport.Add(entry with
                         {
                             Side = sideDisplay,
-                            ProcessingStatus = dryRunStatus,
+                            ProcessingStatus = isValid ? "Valid. Not Sent" : "Failed",
                             ErrorDetails = errorDetails
                         });
                     }
 
                     foreach (var message in GeneratedMessages)
                     {
-                        message.Status = dryRunStatus;
-                        message.ErrorMessage = hasProcessingErrors ? ResultFailureMessage : string.Empty;
+                        message.Status = string.IsNullOrWhiteSpace(message.ErrorMessage) ? "Valid. Not Sent" : "Failed";
+                        message.ErrorMessage ??= string.Empty;
                     }
                 }
                 else if (reportEntries.Count > 0)
@@ -1220,6 +1355,68 @@ namespace FixFlow.TradeAllocBridge.WPF.ViewModels
             {
                 IsProcessing = false;
             }
+        }
+
+        private static string SummarizeErrors(IEnumerable<string> errors)
+        {
+            var rawErrors = errors
+                .Where(error => !string.IsNullOrWhiteSpace(error))
+                .Select(error => error.Trim())
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            if (rawErrors.Count == 0)
+            {
+                return string.Empty;
+            }
+
+            var aggregated = new List<string>();
+            var invalidValueGroups = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+            var numericIssueDetails = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (var error in rawErrors)
+            {
+                var numericMatch = NumericIssueRegex.Match(error);
+                if (numericMatch.Success)
+                {
+                    numericIssueDetails.Add(numericMatch.Groups["detail"].Value.Trim());
+                    continue;
+                }
+
+                var match = InvalidValueRegex.Match(error);
+                if (!match.Success)
+                {
+                    aggregated.Add(error);
+                    continue;
+                }
+
+                var field = match.Groups["field"].Value.Trim();
+                var value = match.Groups["value"].Value.Trim();
+                if (!invalidValueGroups.TryGetValue(field, out var values))
+                {
+                    values = new List<string>();
+                    invalidValueGroups[field] = values;
+                }
+
+                if (!values.Contains(value, StringComparer.OrdinalIgnoreCase))
+                {
+                    values.Add(value);
+                }
+            }
+
+            foreach (var group in invalidValueGroups)
+            {
+                aggregated.Add(group.Value.Count == 1
+                    ? $"{group.Key} has an invalid value: {group.Value[0]}"
+                    : $"{group.Key} has invalid value(s): {string.Join(", ", group.Value)}");
+            }
+
+            if (numericIssueDetails.Count > 0)
+            {
+                aggregated.Add($"Unexpected non-numeric value(s) found for numeric FIX fields: {string.Join(", ", numericIssueDetails)}.");
+            }
+
+            return string.Join(" | ", aggregated);
         }
 
         private void TryUpdateMappingValidatedDate(string mapPath)

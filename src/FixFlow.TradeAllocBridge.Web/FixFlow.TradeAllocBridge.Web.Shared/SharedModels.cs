@@ -65,6 +65,7 @@ public record FixDictionaryTag(
     bool? IsRequired,
     IReadOnlyList<FixDictionaryEnumValue> Enums,
     IReadOnlyList<string> MessagesUsing,
+    IReadOnlyList<string> ComponentPaths,
     int Depth,
     int Order);
 
@@ -83,6 +84,16 @@ public record FixDictionaryFieldOption(
     string Type,
     IReadOnlyList<FixDictionaryEnumValue> Enums,
     string Display);
+
+public record FixDictionaryTagSuggestionOption(
+    string Name,
+    string Number,
+    string Type,
+    string Display,
+    string CommitValue,
+    IReadOnlyList<string> ComponentPaths,
+    int Depth,
+    bool IsEnumMatch);
 
 public record FixDictionaryLoadResult(
     string StatusMessage,
@@ -122,10 +133,15 @@ public record FixFieldOption(
     string Tag,
     string Display);
 
+public record FixTagEnumOption(
+    string Value,
+    string Description);
+
 public record FixTagMetadata(
     string Tag,
     string? Name,
-    string Level);
+    string Level,
+    IReadOnlyList<FixTagEnumOption> Enums);
 
 public record MappingFieldEntry(
     string ColumnName,
@@ -158,6 +174,7 @@ public record MappingEditorDto(
     string ClientId,
     string OrganizationName,
     string SenderDomain,
+    bool DisableAllocationMerge,
     string SenderCompId,
     string TargetCompId,
     string TargetSubId,
@@ -177,6 +194,7 @@ public record MappingSaveRequest(
     string ClientId,
     string OrganizationName,
     string SenderDomain,
+    bool DisableAllocationMerge,
     string SenderCompId,
     string TargetCompId,
     string TargetSubId,

@@ -85,6 +85,15 @@
                         <label>FIX ID (Tag 115)</label>
                         <input class="text-input" disabled="@(!State.IsEditing)" @bind="State.OnBehalfOfCompId" @bind:event="oninput" @bind:after="OnOnBehalfOfCompChanged" />
                     </div>
+                    <div class="map-form-field map-form-field-check">
+                        <label class="check-input merge-allocations-toggle">
+                            <input type="checkbox"
+                                   checked="@(!State.DisableAllocationMerge)"
+                                   disabled="@(!State.IsEditing)"
+                                   @onchange="OnMergeAllocationsChanged" />
+                            <span>Merge Allocations</span>
+                        </label>
+                    </div>
                 </div>
             </div>
 
@@ -217,11 +226,39 @@
                             <div class="map-defaults">
                                 @foreach (var dep in MissingDependencyTags)
                                 {
+                                    var defaultValue = GetDefaultValue(dep);
+                                    var enumOptions = GetTagEnumOptions(dep);
+                                    var useEnumDropdown = enumOptions.Count > 0;
+                                    var hasCustomDefault = useEnumDropdown &&
+                                                           !string.IsNullOrWhiteSpace(defaultValue) &&
+                                                           enumOptions.All(option => !string.Equals(option.Value, defaultValue, StringComparison.OrdinalIgnoreCase));
                                     <div class="map-default-row">
                                         <label>Default for @GetTagDisplay(dep)</label>
-                                        <input class="text-input"
-                                               value="@GetDefaultValue(dep)"
-                                               @oninput="e => SetDefaultValue(dep, e.Value?.ToString())" />
+                                        @if (useEnumDropdown)
+                                        {
+                                            <select class="text-input"
+                                                    value="@defaultValue"
+                                                    @onchange="e => SetDefaultValue(dep, e.Value?.ToString())">
+                                                <option value=""></option>
+                                                @if (hasCustomDefault)
+                                                {
+                                                    <option value="@defaultValue">@defaultValue (current)</option>
+                                                }
+                                                @foreach (var enumOption in enumOptions)
+                                                {
+                                                    var description = string.IsNullOrWhiteSpace(enumOption.Description)
+                                                        ? enumOption.Value
+                                                        : $"{enumOption.Value} = {enumOption.Description}";
+                                                    <option value="@enumOption.Value">@description</option>
+                                                }
+                                            </select>
+                                        }
+                                        else
+                                        {
+                                            <input class="text-input"
+                                                   value="@defaultValue"
+                                                   @oninput="e => SetDefaultValue(dep, e.Value?.ToString())" />
+                                        }
                                     </div>
                                 }
                             </div>
@@ -496,6 +533,7 @@
         State.OriginalClientId = mapping.ClientId ?? string.Empty;
         State.OrganizationName = mapping.OrganizationName ?? string.Empty;
         State.SenderDomain = mapping.SenderDomain ?? string.Empty;
+        State.DisableAllocationMerge = mapping.DisableAllocationMerge;
         State.SenderCompId = mapping.SenderCompId ?? string.Empty;
         State.TargetCompId = mapping.TargetCompId ?? string.Empty;
         State.TargetSubId = mapping.TargetSubId ?? string.Empty;
@@ -564,6 +602,7 @@
             State.OriginalClientId = null;
             State.OrganizationName = string.Empty;
             State.SenderDomain = string.Empty;
+            State.DisableAllocationMerge = false;
             State.SenderCompId = defaults?.SenderCompId ?? string.Empty;
             State.TargetCompId = defaults?.TargetCompId ?? string.Empty;
             State.TargetSubId = defaults?.TargetSubId ?? string.Empty;
@@ -741,6 +780,7 @@
                 NormalizeUpper(State.ClientId),
                 State.OrganizationName?.Trim() ?? string.Empty,
                 NormalizeUpper(State.SenderDomain),
+                State.DisableAllocationMerge,
                 NormalizeUpper(State.SenderCompId),
                 string.IsNullOrWhiteSpace(State.TargetCompId) ? "BROKER" : NormalizeUpper(State.TargetCompId),
                 NormalizeUpper(State.TargetSubId),
@@ -916,6 +956,7 @@
             State.ClientId = string.Empty;
             State.OrganizationName = string.Empty;
             State.SenderDomain = string.Empty;
+            State.DisableAllocationMerge = false;
             State.OnBehalfOfCompId = string.Empty;
             State.FieldMappings.Clear();
             State.IsEditing = false;
@@ -1410,6 +1451,19 @@
         return State.DefaultTagValues.TryGetValue(key, out var global) ? global : string.Empty;
     }
 
+    private IReadOnlyList<FixTagEnumOption> GetTagEnumOptions(string tag)
+    {
+        var key = NormalizeTagKey(tag);
+        if (string.IsNullOrWhiteSpace(key))
+        {
+            return Array.Empty<FixTagEnumOption>();
+        }
+
+        return State.TagMetadata.TryGetValue(key, out var meta) && meta.Enums is { Count: > 0 }
+            ? meta.Enums
+            : Array.Empty<FixTagEnumOption>();
+    }
+
     private void SetDefaultValue(string tag, string? value)
     {
         var key = NormalizeTagKey(tag);
@@ -1719,6 +1773,13 @@
     private void OnSenderDomainChanged()
     {
         State.SenderDomain = NormalizeUpper(State.SenderDomain);
+        MarkDirty();
+    }
+
+    private void OnMergeAllocationsChanged(ChangeEventArgs args)
+    {
+        var mergeEnabled = args.Value is bool value && value;
+        State.DisableAllocationMerge = !mergeEnabled;
         MarkDirty();
     }
 

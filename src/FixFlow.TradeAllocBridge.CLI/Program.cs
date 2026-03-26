@@ -25,7 +25,7 @@ namespace FixFlow.TradeAllocBridge.CLI
         {
             if (Environment.UserInteractive)
             {
-                Console.Title = "TradeAllocBridge CLI";
+                Console.Title = "FixFlowService";
             }
 
             if (args.Length == 0 || args[0].Equals("help", StringComparison.OrdinalIgnoreCase))
@@ -35,7 +35,7 @@ namespace FixFlow.TradeAllocBridge.CLI
                 Console.WriteLine("  TradeAllocBridge run [--dry-run] [--interval-seconds N]");
                 Console.WriteLine();
                 Console.WriteLine("Description:");
-                Console.WriteLine("  Processes mailbox allocations, builds FIX 4.2 messages, and optionally sends them.");
+                Console.WriteLine("  FixFlowService processes mailbox allocations, builds FIX 4.2 messages, and optionally sends them.");
                 Console.WriteLine("  Use --dry-run to validate and log FIX messages without transmitting them.");
                 return 0;
             }
@@ -89,7 +89,7 @@ namespace FixFlow.TradeAllocBridge.CLI
 
                 if (command == "run" || command == "watch")
                 {
-                    Console.WriteLine("Starting TradeAllocBridge CLI in hosted mode.");
+                    Console.WriteLine("Starting FixFlowService in hosted mode.");
                     Console.WriteLine($"Polling interval: {intervalSeconds}s");
                     Console.WriteLine(dryRun
                         ? "Running in DRY-RUN (validation-only) mode - no messages will be sent."
@@ -104,13 +104,18 @@ namespace FixFlow.TradeAllocBridge.CLI
             catch (Exception ex)
             {
                 Console.Error.WriteLine($"Fatal error: {ex.Message}");
-                Log.Error(ex, "Unhandled exception in TradeAllocBridge CLI");
+                Log.Error(ex, "Unhandled exception in FixFlowService");
                 return -1;
             }
         }
 
         private static void ConfigureServices(HostApplicationBuilder builder, AppConfig config)
         {
+            if (string.IsNullOrWhiteSpace(config.Fix.SessionQualifier))
+            {
+                config.Fix.SessionQualifier = builder.Configuration["FixSessionQualifiers:Service"] ?? "FixFlowService";
+            }
+
             builder.Services.AddSingleton(config);
             builder.Services.AddSingleton(config.Email);
             builder.Services.AddSingleton(config.Fix);
@@ -123,24 +128,24 @@ namespace FixFlow.TradeAllocBridge.CLI
             builder.Services.AddSingleton<FixClient>();
             builder.Services.AddSingleton<ValidationReport>();
 
-            // Prepare canonical paths used by CLI
-            var activeConfigs = ResolveCliConfigsDir();
+            // Prepare canonical paths used by the service runtime.
+            var activeConfigs = ResolveServiceConfigsDir();
             var incoming = Path.Combine(activeConfigs, "incoming");
 
-            // Register FixMappingRepository for the CLI active configs directory
+            // Register FixMappingRepository for the active configs directory.
             builder.Services.AddSingleton<FixMappingRepository>(sp =>
             {
                 var loggerRepo = sp.GetRequiredService<ILogger<FixMappingRepository>>();
                 return new FixMappingRepository(activeConfigs, loggerRepo);
             });
 
-            // Register the MappingStagingWatcher so CLI watches configs/incoming
+            // Register the MappingStagingWatcher so FixFlowService watches configs/incoming.
             builder.Services.AddSingleton(sp =>
                 new MappingStagingWatcher(incoming, activeConfigs, sp.GetRequiredService<ILogger<MappingStagingWatcher>>())
             );
         }
 
-        private static string ResolveCliConfigsDir()
+        private static string ResolveServiceConfigsDir()
         {
             const string envVar = "FIXFLOW_CLI_CONFIGS";
             try
@@ -221,68 +226,12 @@ namespace FixFlow.TradeAllocBridge.CLI
             var fixApp = services.GetRequiredService<FixApp>();
             fixApp.Engine = fixEngine;
 
-            Console.WriteLine("===> FIX XML Group Definition Present? " +
-                File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "cfg", "FIX42.xml"))
-                    .Contains("NoAllocs"));
-
-            // Manual verification of dictionary load
-            try
-            {
-                var dictPath = Path.Combine(AppContext.BaseDirectory, "cfg", "FIX42.xml");
-                var dd = new QuickFix.DataDictionary.DataDictionary(dictPath);
-                Console.WriteLine($" Dictionary loaded successfully: {dictPath}");
-                Console.WriteLine($"   Fields: {dd.FieldsByTag.Count}, Messages: {dd.Messages.Count}");
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"Failed to load FIX dictionary manually: {ex.Message}");
-            }
-
             Console.WriteLine(dryRun
                 ? "Running in DRY-RUN (validation-only) mode - no messages will be sent."
-                : "Starting manual trade allocation processing...");
+                : "Starting allocation processing...");
 
-            // -------------------------------------------------------------------
-            // Fetch emails or use local test data
-            // -------------------------------------------------------------------
-            List<AllocationEmail> emails;
-            if (dryRun)
-            {
-                Console.WriteLine("Dry-run mode: using local test spreadsheet instead of mailbox.");
-
-                string configDir;
-                var probePaths = new[]
-                {
-                    Path.Combine(AppContext.BaseDirectory, "configs"),
-                    Path.Combine(Directory.GetCurrentDirectory(), "configs"),
-                    Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "configs")),
-                    Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "configs"))
-                };
-                configDir = probePaths.FirstOrDefault(Directory.Exists)
-                            ?? Path.Combine(AppContext.BaseDirectory, "configs");
-
-                var mapPath = Path.Combine(configDir, "RAJA_map.json");
-
-                emails = new List<AllocationEmail>
-                {
-                    new AllocationEmail
-                    {
-                        Subject = "Local Test Allocation",
-                        SenderEmail = "test@test.local",
-                        ClientId = "RAJA",
-                        MapPath = mapPath,
-                        Attachments = new List<string>
-                        {
-                            Path.Combine(AppContext.BaseDirectory, "Allocations_Multiple.csv")
-                        }
-                    }
-                };
-            }
-            else
-            {
-                emails = await emailService.FetchNewEmailsAsync();
-                Console.WriteLine($"Fetched {emails.Count} email(s) with attachments.");
-            }
+            var emails = await emailService.FetchNewEmailsAsync();
+            Console.WriteLine($"Fetched {emails.Count} email(s) with attachments.");
 
             if (cancellationToken.IsCancellationRequested)
             {
@@ -305,8 +254,8 @@ namespace FixFlow.TradeAllocBridge.CLI
                 try
                 {
                     var mapping = MappingConfig.Load(email.MapPath);
-                    string senderComp = mapping.Predefined?.SenderCompID ?? mapping.ClientId ?? "DEFAULTSENDER";
-                    string targetComp = mapping.Predefined?.TargetCompID ?? "RJSYN";
+                    string senderComp = ResolveSenderCompId(mapping, config.Fix);
+                    string targetComp = ResolveTargetCompId(mapping, config.Fix);
                     var senderSubId = mapping.Predefined?.SenderSubID;
                     var targetSubId = mapping.Predefined?.TargetSubID;
                     allMappings.Add((senderComp, targetComp, senderSubId, targetSubId));
@@ -453,13 +402,49 @@ namespace FixFlow.TradeAllocBridge.CLI
                         Console.WriteLine($"{missingTrades.Count} out of {totalTrades} Allocation(s) failed to process. Missing required value(s): {string.Join(", ", missingTags)}");
                     }
 
+                    var disableAllocationMerge = mapping.DisableAllocationMerge;
+                    string ResolveGroupKey(TradeRecord trade)
+                    {
+                        if (disableAllocationMerge)
+                        {
+                            return $"ROW:{trade.Id}";
+                        }
+
+                        var sideValue = trade.Fields.TryGetValue(sideColumn, out var side) ? side.Trim() : string.Empty;
+                        var symbolValue = trade.Fields.TryGetValue(symbolColumn, out var symbol) ? symbol.Trim() : string.Empty;
+                        return $"{symbolValue}|{sideValue}";
+                    }
+
+                    string ResolveSymbolValue(TradeRecord trade) =>
+                        trade.Fields.TryGetValue(symbolColumn, out var symbolValue) ? symbolValue.Trim() : string.Empty;
+
+                    string ResolveSideValue(TradeRecord trade) =>
+                        trade.Fields.TryGetValue(sideColumn, out var sideValue) ? sideValue.Trim() : string.Empty;
+
+                    string BuildMergeFailureMessage(int groupTotal, string side, string symbol, IEnumerable<string> tags)
+                    {
+                        if (disableAllocationMerge)
+                        {
+                            return $"{groupTotal} allocation(s) failed to process. Missing required value(s): {string.Join(", ", tags)}.";
+                        }
+
+                        return $"{groupTotal} out of {totalTrades} allocations identified for group trade {side}/{symbol} failed to merge because it is missing required value(s): {string.Join(", ", tags)}. Allocations processing cancelled.";
+                    }
+
+                    string BuildSkippedSendMessage(int groupTotal, string side, string symbol)
+                    {
+                        if (disableAllocationMerge)
+                        {
+                            return $"Allocation {side}/{symbol} was built but cannot be sent because other allocations have error(s). Allocations processing cancelled.";
+                        }
+
+                        var failedAllocationsCount = totalTrades - groupTotal;
+                        return $" {groupTotal} out of {totalTrades} Allocations identified for group trade {side}/{symbol} were successfully merged. Fix message cannot be sent because {failedAllocationsCount} trades have error(s). Allocations processing cancelled.";
+                    }
+
                     var groupedBySymbolAndSide = trades
                         .Except(missingTrades)
-                        .GroupBy(t => new
-                        {
-                            Symbol = t.Fields.TryGetValue(symbolColumn, out var symbolValue) ? symbolValue.Trim() : string.Empty,
-                            Side = t.Fields.TryGetValue(sideColumn, out var sideValue) ? sideValue.Trim() : string.Empty
-                        })
+                        .GroupBy(ResolveGroupKey)
                         .ToList();
 
                     if (groupedBySymbolAndSide.Count == 0)
@@ -468,7 +453,9 @@ namespace FixFlow.TradeAllocBridge.CLI
                         continue;
                     }
 
-                    Console.WriteLine($"Found {groupedBySymbolAndSide.Count} trade group(s) by symbol/side.");
+                    Console.WriteLine(disableAllocationMerge
+                        ? $"Found {groupedBySymbolAndSide.Count} allocation(s) to process individually (merge disabled)."
+                        : $"Found {groupedBySymbolAndSide.Count} trade group(s) by symbol/side.");
 
                     // -------------------------------------------------------------------
                     // Build and send one AllocationInstruction (35=J) per symbol
@@ -476,31 +463,38 @@ namespace FixFlow.TradeAllocBridge.CLI
                     var reportEntries = new List<ValidationResult>();
                     var groupErrors = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
                     var groupTotals = trades
-                        .GroupBy(t => new
-                        {
-                            Symbol = t.Fields.TryGetValue(symbolColumn, out var symbolValue) ? symbolValue.Trim() : string.Empty,
-                            Side = t.Fields.TryGetValue(sideColumn, out var sideValue) ? sideValue.Trim() : string.Empty
-                        })
-                        .ToDictionary(g => $"{g.Key.Symbol}|{g.Key.Side}", g => g.Count(), StringComparer.OrdinalIgnoreCase);
+                        .GroupBy(ResolveGroupKey)
+                        .ToDictionary(g => g.Key, g => g.Count(), StringComparer.OrdinalIgnoreCase);
+                    var groupMeta = trades
+                        .GroupBy(ResolveGroupKey)
+                        .ToDictionary(
+                            g => g.Key,
+                            g =>
+                            {
+                                var first = g.First();
+                                return new
+                                {
+                                    Side = ResolveSideValue(first),
+                                    Symbol = ResolveSymbolValue(first)
+                                };
+                            },
+                            StringComparer.OrdinalIgnoreCase);
                     var missingTagsByGroup = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
 
-                    void AddGroupError(string symbol, string side, string error)
+                    void AddGroupError(string groupKey, string error)
                     {
                         if (string.IsNullOrWhiteSpace(error)) return;
-                        var key = $"{symbol}|{side}";
-                        if (!groupErrors.TryGetValue(key, out var errors))
+                        if (!groupErrors.TryGetValue(groupKey, out var errors))
                         {
                             errors = new List<string>();
-                            groupErrors[key] = errors;
+                            groupErrors[groupKey] = errors;
                         }
                         errors.Add(error);
                     }
 
                     foreach (var trade in missingTrades)
                     {
-                        var symbol = trade.Fields.TryGetValue(symbolColumn, out var symbolValue) ? symbolValue.Trim() : string.Empty;
-                        var side = trade.Fields.TryGetValue(sideColumn, out var sideValue) ? sideValue.Trim() : string.Empty;
-                        var key = $"{symbol}|{side}";
+                        var key = ResolveGroupKey(trade);
 
                         if (!missingTagsByGroup.TryGetValue(key, out var tags))
                         {
@@ -517,17 +511,17 @@ namespace FixFlow.TradeAllocBridge.CLI
 
                     foreach (var kvp in missingTagsByGroup)
                     {
-                        var parts = kvp.Key.Split('|');
-                        var symbol = parts.Length > 0 ? parts[0] : string.Empty;
-                        var side = parts.Length > 1 ? parts[1] : string.Empty;
                         var groupTotal = groupTotals.TryGetValue(kvp.Key, out var count) ? count : 0;
-                        var message =
-                            $"{groupTotal} out of {totalTrades} allocations identified for group trade {side}/{symbol} failed to merge because it is missing required value(s): {string.Join(", ", kvp.Value)}. Allocations processing cancelled.";
-                        AddGroupError(symbol, side, message);
+                        var meta = groupMeta.TryGetValue(kvp.Key, out var details)
+                            ? details
+                            : new { Side = string.Empty, Symbol = string.Empty };
+                        var message = BuildMergeFailureMessage(groupTotal, meta.Side, meta.Symbol, kvp.Value);
+                        AddGroupError(kvp.Key, message);
                     }
 
-                    var preparedMessages = new List<(FixMessage Message, string AllocId, string Symbol, string Side, int TradeCount, IEnumerable<TradeRecord> Trades)>();
+                    var preparedMessages = new List<(FixMessage Message, string AllocId, string Symbol, string Side, string GroupKey, int TradeCount, IEnumerable<TradeRecord> Trades)>();
                     int buildFailures = 0;
+                    var allocIdToGroupKey = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
                     foreach (var symbolGroup in groupedBySymbolAndSide)
                     {
@@ -536,13 +530,18 @@ namespace FixFlow.TradeAllocBridge.CLI
                             break;
                         }
 
-                        string symbol = symbolGroup.Key.Symbol;
-                        string side = symbolGroup.Key.Side;
+                        var groupKey = symbolGroup.Key;
+                        var meta = groupMeta.TryGetValue(groupKey, out var details)
+                            ? details
+                            : new { Side = string.Empty, Symbol = string.Empty };
+                        string symbol = meta.Symbol;
+                        string side = meta.Side;
                         var allocId = fixBuilder.NextAllocId();
+                        allocIdToGroupKey[allocId] = groupKey;
                         var groupTradeDate = ResolveTradeDate(symbolGroup, tradeDateColumn);
                         var reportAllocId = FormatAllocId(allocId, groupTradeDate);
-                        string senderComp = mapping.Predefined?.SenderCompID ?? mapping.ClientId ?? "TRADEALLOC";
-                        string targetComp = mapping.Predefined?.TargetCompID ?? "EXECUTOR";
+                        string senderComp = ResolveSenderCompId(mapping, config.Fix);
+                        string targetComp = ResolveTargetCompId(mapping, config.Fix);
 
                         FixMessage mergedMsg;
                         try
@@ -562,22 +561,24 @@ namespace FixFlow.TradeAllocBridge.CLI
                                 string.Empty,
                                 string.Empty
                             ));
-                            AddGroupError(symbol, side, ex.Message);
+                            AddGroupError(groupKey, ex.Message);
                             buildFailures++;
                             continue;
                         }
 
-                        preparedMessages.Add((mergedMsg, allocId, symbol, side, symbolGroup.Count(), symbolGroup));
+                        preparedMessages.Add((mergedMsg, allocId, symbol, side, groupKey, symbolGroup.Count(), symbolGroup));
                     }
 
                     bool canSendFixMessages = !missingTrades.Any() && buildFailures == 0;
                     if (!canSendFixMessages)
                     {
-                        Console.WriteLine("Allocations processing cancelled. One or more merged allocations failed to process.");
+                        Console.WriteLine(disableAllocationMerge
+                            ? "Allocations processing cancelled. One or more allocations failed to process."
+                            : "Allocations processing cancelled. One or more merged allocations failed to process.");
                     }
 
-                    var senderCompId = mapping.Predefined?.SenderCompID ?? mapping.ClientId ?? "TRADEALLOC";
-                    var targetCompId = mapping.Predefined?.TargetCompID ?? "EXECUTOR";
+                    var senderCompId = ResolveSenderCompId(mapping, config.Fix);
+                    var targetCompId = ResolveTargetCompId(mapping, config.Fix);
                     var senderSubId = mapping.Predefined?.SenderSubID;
                     var targetSubId = mapping.Predefined?.TargetSubID;
                     foreach (var prepared in preparedMessages)
@@ -591,6 +592,7 @@ namespace FixFlow.TradeAllocBridge.CLI
                         var allocId = prepared.AllocId;
                         var symbol = prepared.Symbol;
                         var side = prepared.Side;
+                        var groupKey = prepared.GroupKey;
                         var tradeCount = prepared.TradeCount;
                         var groupTradeDate = ResolveTradeDate(prepared.Trades, tradeDateColumn);
 
@@ -601,14 +603,11 @@ namespace FixFlow.TradeAllocBridge.CLI
                         {
                             status = "Failed";
                             errorMessage = "Skipped";
-                            var groupKey = $"{symbol}|{side}";
                             if (!groupErrors.ContainsKey(groupKey))
                             {
                                 var groupTotal = groupTotals.TryGetValue(groupKey, out var count) ? count : tradeCount;
-                                var failedAllocationsCount = totalTrades - groupTotal;
-                                var cancelMessage =
-                                    $" {groupTotal} out of {totalTrades} Allocations identified for group trade {side}/{symbol} were successfully merged. Fix message cannot be sent because {failedAllocationsCount} trades have error(s). Allocations processing cancelled.";
-                                AddGroupError(symbol, side, cancelMessage);
+                                var cancelMessage = BuildSkippedSendMessage(groupTotal, side, symbol);
+                                AddGroupError(groupKey, cancelMessage);
                             }
                         }
                         else
@@ -642,25 +641,33 @@ namespace FixFlow.TradeAllocBridge.CLI
                             {
                                 status = "Failed";
                                 errorMessage = BuildSessionMissingMessage(senderCompId, targetCompId, senderSubId, targetSubId);
-                                AddGroupError(symbol, side, errorMessage);
+                                AddGroupError(groupKey, errorMessage);
                             }
                             else
                             {
-                                var nonNullSession = sessionID; // local alias
-                                var sendResult = dryRun ? "OK" : await fixClient.SendAsync(mergedMsg, nonNullSession);
+                                var sendResult = dryRun ? "OK" : await fixClient.SendAsync(mergedMsg, sessionID);
                                 status = sendResult == "OK" ? "Sent" : "Failed";
                                 errorMessage = sendResult == "OK" ? string.Empty : sendResult;
                                 if (sendResult != "OK")
                                 {
-                                    AddGroupError(symbol, side, sendResult);
+                                    AddGroupError(groupKey, sendResult);
                                 }
                             }
                         }
 
                         Console.WriteLine($"AllocID={allocId} ({side}/{symbol})  {status}");
-                        fixBuilderLogger.LogInformation(
-                            "Sent merged allocation {AllocId} for {Side} of {Symbol} security ({Count} trades): {Status}",
-                            allocId, side, symbol, tradeCount, status);
+                        if (disableAllocationMerge)
+                        {
+                            fixBuilderLogger.LogInformation(
+                                "Sent allocation {AllocId} for {Side} of {Symbol} security: {Status}",
+                                allocId, side, symbol, status);
+                        }
+                        else
+                        {
+                            fixBuilderLogger.LogInformation(
+                                "Sent merged allocation {AllocId} for {Side} of {Symbol} security ({Count} trades): {Status}",
+                                allocId, side, symbol, tradeCount, status);
+                        }
 
                         string rawFix = mergedMsg.ToString().Replace('\u0001', '|').Replace("\r", "").Replace("\n", "");
                         reportEntries.Add(new ValidationResult(
@@ -704,7 +711,9 @@ namespace FixFlow.TradeAllocBridge.CLI
                             string errorDetails = string.Empty;
                             if (groupErrors.Count > 0)
                             {
-                                var currentKey = $"{entry.Symbol}|{entry.Side}";
+                                var currentKey = allocIdToGroupKey.TryGetValue(entry.AllocID, out var mappedKey)
+                                    ? mappedKey
+                                    : $"{entry.Symbol}|{entry.Side}";
                                 if (groupErrors.TryGetValue(currentKey, out var errors))
                                 {
                                     var details = errors
@@ -772,6 +781,41 @@ namespace FixFlow.TradeAllocBridge.CLI
             }
 
             return "No FIX session found for " + string.Join(", ", parts) + ".";
+        }
+
+        private static string ResolveSenderCompId(MappingConfig mapping, FixConfig fixConfig)
+        {
+            var senderCompId = FirstNonEmpty(mapping.Predefined?.SenderCompID, mapping.ClientId, fixConfig.SenderCompId);
+            if (string.IsNullOrWhiteSpace(senderCompId))
+            {
+                throw new InvalidOperationException("SenderCompID is not configured for the mapping or FixFlowService.");
+            }
+
+            return senderCompId.Trim();
+        }
+
+        private static string ResolveTargetCompId(MappingConfig mapping, FixConfig fixConfig)
+        {
+            var targetCompId = FirstNonEmpty(mapping.Predefined?.TargetCompID, fixConfig.TargetCompId);
+            if (string.IsNullOrWhiteSpace(targetCompId))
+            {
+                throw new InvalidOperationException("TargetCompID is not configured for the mapping or FixFlowService.");
+            }
+
+            return targetCompId.Trim();
+        }
+
+        private static string? FirstNonEmpty(params string?[] candidates)
+        {
+            foreach (var candidate in candidates)
+            {
+                if (!string.IsNullOrWhiteSpace(candidate))
+                {
+                    return candidate;
+                }
+            }
+
+            return null;
         }
 
     }

@@ -57,10 +57,14 @@ namespace FixFlow.TradeAllocBridge.WPF
             var configuration = configurationBuilder.Build();
 
             var appConfig = configuration.Get<AppConfig>() ?? new AppConfig(); // This now works
+            if (string.IsNullOrWhiteSpace(appConfig.Fix.SessionQualifier))
+            {
+                appConfig.Fix.SessionQualifier = configuration["FixSessionQualifiers:Client"] ?? "FixFlowClient";
+            }
             LogService.Configure(appConfig.Logging);
 
             // Register core services
-            services.AddSingleton(configuration);
+            services.AddSingleton<IConfiguration>(configuration);
             services.AddSingleton(appConfig);
             services.AddSingleton(appConfig.Email);
             services.AddSingleton(appConfig.Fix);

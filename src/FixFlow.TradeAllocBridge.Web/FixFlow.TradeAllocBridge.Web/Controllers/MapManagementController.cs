@@ -112,7 +112,10 @@ public class MapManagementController : ControllerBase
             .Select(kvp =>
             {
                 var level = cache.TagLevels.TryGetValue(kvp.Key, out var found) ? found : "Unknown";
-                return new FixTagMetadata(kvp.Key, kvp.Value, level);
+                var enums = cache.TagEnums.TryGetValue(kvp.Key, out var enumValues)
+                    ? enumValues
+                    : Array.Empty<FixTagEnumOption>();
+                return new FixTagMetadata(kvp.Key, kvp.Value, level, enums);
             })
             .ToList();
 
@@ -246,6 +249,7 @@ public class MapManagementController : ControllerBase
                 ClientId = clientId,
                 OrganizationName = string.IsNullOrWhiteSpace(request.OrganizationName) ? string.Empty : request.OrganizationName.Trim(),
                 SenderDomain = senderDomain,
+                DisableAllocationMerge = request.DisableAllocationMerge,
                 Predefined = new PredefinedFields
                 {
                     SenderCompID = NormalizeUpper(request.SenderCompId),
@@ -520,6 +524,7 @@ public class MapManagementController : ControllerBase
             mapping.ClientId ?? string.Empty,
             mapping.OrganizationName ?? string.Empty,
             mapping.SenderDomain ?? string.Empty,
+            mapping.DisableAllocationMerge,
             mapping.Predefined?.SenderCompID ?? string.Empty,
             mapping.Predefined?.TargetCompID ?? string.Empty,
             mapping.Predefined?.TargetSubID ?? string.Empty,
@@ -702,11 +707,12 @@ public class MapManagementController : ControllerBase
     {
         var names = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         var levels = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var enums = new Dictionary<string, IReadOnlyList<FixTagEnumOption>>(StringComparer.OrdinalIgnoreCase);
 
         var path = ResolveFixDictionaryPath();
         if (string.IsNullOrWhiteSpace(path) || !System.IO.File.Exists(path))
         {
-            return new FixTagCache(names, levels);
+            return new FixTagCache(names, levels, enums);
         }
 
         try
@@ -715,23 +721,32 @@ public class MapManagementController : ControllerBase
             var root = doc.Root;
             if (root == null)
             {
-                return new FixTagCache(names, levels);
+                return new FixTagCache(names, levels, enums);
             }
 
-            var fieldMap = root.Element("fields")?
-                .Elements("field")
-                .Select(f => new
-                {
-                    Name = (string?)f.Attribute("name"),
-                    Number = (string?)f.Attribute("number")
-                })
+            var fieldMap = (root.Element("fields")?.Elements("field") ?? Enumerable.Empty<XElement>())
+                .Select(f => new TagFieldInfo(
+                    (string?)f.Attribute("name") ?? string.Empty,
+                    (string?)f.Attribute("number") ?? string.Empty,
+                    f.Elements("value")
+                        .Select(v => new FixTagEnumOption(
+                            (string?)v.Attribute("enum") ?? string.Empty,
+                            (string?)v.Attribute("description") ?? string.Empty))
+                        .Where(v => !string.IsNullOrWhiteSpace(v.Value) || !string.IsNullOrWhiteSpace(v.Description))
+                        .ToList()))
                 .Where(f => !string.IsNullOrWhiteSpace(f.Name) && !string.IsNullOrWhiteSpace(f.Number))
-                .ToDictionary(f => f.Name!, f => f.Number!, StringComparer.OrdinalIgnoreCase)
-                ?? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                .ToList();
 
-            foreach (var kvp in fieldMap)
+            var fieldNumberByName = fieldMap
+                .ToDictionary(f => f.Name!, f => f.Number!, StringComparer.OrdinalIgnoreCase);
+
+            foreach (var field in fieldMap)
             {
-                names[kvp.Value] = kvp.Key;
+                names[field.Number!] = field.Name!;
+                if (field.Enums.Count > 0)
+                {
+                    enums[field.Number!] = field.Enums;
+                }
             }
 
             var allocation = root.Element("messages")?
@@ -744,14 +759,14 @@ public class MapManagementController : ControllerBase
                 {
                     if (element.Name.LocalName == "field")
                     {
-                        AddLevel(levels, fieldMap, (string?)element.Attribute("name"), "Header");
+                        AddLevel(levels, fieldNumberByName, (string?)element.Attribute("name"), "Header");
                     }
                     else if (element.Name.LocalName == "group" &&
                              string.Equals((string?)element.Attribute("name"), "NoAllocs", StringComparison.OrdinalIgnoreCase))
                     {
                         foreach (var groupField in element.Elements("field"))
                         {
-                            AddLevel(levels, fieldMap, (string?)groupField.Attribute("name"), "NoAllocs");
+                            AddLevel(levels, fieldNumberByName, (string?)groupField.Attribute("name"), "NoAllocs");
                         }
 
                         foreach (var nestedGroup in element.Elements("group"))
@@ -764,7 +779,7 @@ public class MapManagementController : ControllerBase
 
                             foreach (var groupField in nestedGroup.Elements("field"))
                             {
-                                AddLevel(levels, fieldMap, (string?)groupField.Attribute("name"), "NoMiscFees");
+                                AddLevel(levels, fieldNumberByName, (string?)groupField.Attribute("name"), "NoMiscFees");
                             }
                         }
                     }
@@ -773,10 +788,10 @@ public class MapManagementController : ControllerBase
         }
         catch
         {
-            return new FixTagCache(names, levels);
+            return new FixTagCache(names, levels, enums);
         }
 
-        return new FixTagCache(names, levels);
+        return new FixTagCache(names, levels, enums);
     }
 
     private static void AddLevel(
@@ -1449,5 +1464,11 @@ public class MapManagementController : ControllerBase
 
     private sealed record FixTagCache(
         Dictionary<string, string> TagNames,
-        Dictionary<string, string> TagLevels);
+        Dictionary<string, string> TagLevels,
+        Dictionary<string, IReadOnlyList<FixTagEnumOption>> TagEnums);
+
+    private sealed record TagFieldInfo(
+        string Name,
+        string Number,
+        IReadOnlyList<FixTagEnumOption> Enums);
 }

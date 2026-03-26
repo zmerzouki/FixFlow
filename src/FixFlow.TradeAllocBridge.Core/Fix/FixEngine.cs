@@ -133,7 +133,8 @@ namespace FixFlow.TradeAllocBridge.Core.Fix
         {
             _logger.LogInformation("♻️ Reloading SessionSettings and reinitializing initiator...");
 
-            _sessionSettings = new SessionSettings(_configFile);
+            var allSettings = new SessionSettings(_configFile);
+            _sessionSettings = FilterSessionSettings(allSettings);
             foreach (SessionID sessionId in _sessionSettings.GetSessions())
             {
                 var dict = _sessionSettings.Get(sessionId);
@@ -144,6 +145,45 @@ namespace FixFlow.TradeAllocBridge.Core.Fix
             var logFactory = new ScreenLogFactory(_sessionSettings);
             var messageFactory = new DefaultMessageFactory();
             _initiator = new SocketInitiator(app, storeFactory, _sessionSettings, logFactory, messageFactory);
+        }
+
+        private SessionSettings FilterSessionSettings(SessionSettings allSettings)
+        {
+            var qualifier = _config.NormalizedSessionQualifier;
+            if (string.IsNullOrWhiteSpace(qualifier))
+            {
+                _logger.LogInformation("ℹ️ No SessionQualifier configured. Loading all FIX sessions from {Config}", _configFile);
+                return allSettings;
+            }
+
+            var filtered = new SessionSettings();
+            filtered.Set(new SettingsDictionary("DEFAULT", allSettings.Get()));
+
+            var matchingSessions = allSettings
+                .GetSessions()
+                .Where(sessionId => string.Equals(sessionId.SenderSubID, qualifier, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+
+            if (matchingSessions.Count == 0)
+            {
+                _logger.LogWarning(
+                    "⚠️ No FIX sessions matched SessionQualifier {Qualifier} in {Config}. Falling back to all sessions.",
+                    qualifier,
+                    _configFile);
+                return allSettings;
+            }
+
+            foreach (var sessionId in matchingSessions)
+            {
+                filtered.Set(sessionId, new SettingsDictionary("SESSION", allSettings.Get(sessionId)));
+            }
+
+            _logger.LogInformation(
+                "✅ Loaded {Count} FIX session(s) matching SessionQualifier {Qualifier}.",
+                matchingSessions.Count,
+                qualifier);
+
+            return filtered;
         }
 
         // --------------------------------------------------------------

@@ -69,6 +69,12 @@ namespace FixFlow.TradeAllocBridge.Core.Config
         [JsonPropertyName("dateValidated")]
         public string? DateValidated { get; set; }
 
+        /// <summary>
+        /// When true, each allocation row is processed independently and not merged with other rows.
+        /// </summary>
+        [JsonPropertyName("disableAllocationMerge")]
+        public bool DisableAllocationMerge { get; set; }
+
 
         // Cache the JsonSerializerOptions instance
         private static readonly JsonSerializerOptions CachedJsonOptions = new()

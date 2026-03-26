@@ -20,6 +20,7 @@ public class MapManagementState
     public string ClientId { get; set; } = string.Empty;
     public string OrganizationName { get; set; } = string.Empty;
     public string SenderDomain { get; set; } = string.Empty;
+    public bool DisableAllocationMerge { get; set; }
     public string SenderCompId { get; set; } = string.Empty;
     public string TargetCompId { get; set; } = string.Empty;
     public string TargetSubId { get; set; } = string.Empty;

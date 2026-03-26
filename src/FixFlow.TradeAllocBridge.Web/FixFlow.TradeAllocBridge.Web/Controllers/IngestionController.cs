@@ -5,6 +5,7 @@ using FixFlow.TradeAllocBridge.Core.Mapping;
 using FixFlow.TradeAllocBridge.Core.Reporting;
 using FixFlow.TradeAllocBridge.Web.Shared;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using QuickFix;
@@ -15,6 +16,13 @@ namespace FixFlow.TradeAllocBridge.Web.Controllers;
 [Route("api/ingestion")]
 public class IngestionController : ControllerBase
 {
+    private static readonly Regex InvalidValueRegex = new(
+        @"^(?<field>.+?) has an invalid value: (?<value>.+)$",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex NumericIssueRegex = new(
+        @"^Unexpected non-numeric value\(s\) found for numeric FIX fields: (?<detail>.+)\.$",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
     private readonly ExcelParser _excelParser;
     private readonly FixConfig _fixConfig;
     private readonly FixMappingRepository _mappingRepo;
@@ -309,27 +317,58 @@ public class IngestionController : ControllerBase
                 ResultFailureMessage: string.Empty);
         }
 
-        var numericIssues = FixValueNormalizer.FindNumericFieldIssues(trades, mapping);
-        if (numericIssues.Count > 0)
+        var fieldIssuesByTrade = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+
+        void AddFieldIssue(string tradeId, string error)
         {
-            var detail = string.Join(", ",
-                numericIssues.Select(issue =>
-                    $"{FixValueNormalizer.FormatColumnLabel(issue.ColumnKey)} (tag {issue.Tag}) = '{issue.SampleValue}'"));
-            statusMessage = EnsureInvalidEquityNotice($"Unexpected non-numeric value(s) found for numeric FIX fields: {detail}.");
-            warnings.Add(statusMessage);
-            return new IngestionPreviewResponse(
-                Status: statusMessage,
-                TotalTrades: allocationsSubmitted,
-                ValidTrades: 0,
-                Warnings: warnings,
-                Messages: messages,
-                AllocationsSubmitted: allocationsSubmitted,
-                AllocationsProcessed: 0,
-                AllocationsSent: 0,
-                SuccessfulAllocations: 0,
-                FailedAllocations: allocationsEligible,
-                ResultSuccessMessage: string.Empty,
-                ResultFailureMessage: statusMessage);
+            if (string.IsNullOrWhiteSpace(tradeId) || string.IsNullOrWhiteSpace(error))
+            {
+                return;
+            }
+
+            if (!fieldIssuesByTrade.TryGetValue(tradeId, out var errors))
+            {
+                errors = new List<string>();
+                fieldIssuesByTrade[tradeId] = errors;
+            }
+
+            if (!errors.Contains(error, StringComparer.OrdinalIgnoreCase))
+            {
+                errors.Add(error);
+            }
+        }
+
+        var numericIssues = FixValueNormalizer.FindNumericFieldIssues(trades, mapping);
+        foreach (var issue in numericIssues)
+        {
+            AddFieldIssue(
+                issue.TradeId,
+                $"Unexpected non-numeric value(s) found for numeric FIX fields: {FixValueNormalizer.FormatColumnLabel(issue.ColumnKey)} (tag {issue.Tag}) = '{issue.SampleValue}'.");
+        }
+
+        foreach (var trade in trades)
+        {
+            foreach (var entry in mapping.TradeAllocations)
+            {
+                if (!FixValueNormalizer.TryParseTagNumber(entry.Value, out var tag))
+                {
+                    continue;
+                }
+
+                if (!trade.Fields.TryGetValue(entry.Key, out var rawValue) || string.IsNullOrWhiteSpace(rawValue))
+                {
+                    continue;
+                }
+
+                try
+                {
+                    _ = FixValueNormalizer.Normalize(tag, rawValue, trade.Fields);
+                }
+                catch (Exception ex)
+                {
+                    AddFieldIssue(trade.Id, ex.Message);
+                }
+            }
         }
 
         string ResolveSymbolValue(TradeRecord trade)
@@ -343,8 +382,15 @@ public class IngestionController : ControllerBase
             return hasSecurityIdMapping ? "NA" : string.Empty;
         }
 
+        var disableAllocationMerge = mapping.DisableAllocationMerge;
+
         string ResolveGroupKey(TradeRecord trade)
         {
+            if (disableAllocationMerge)
+            {
+                return $"ROW:{trade.Id}";
+            }
+
             var sideValue = GetFieldValue(trade, sideColumn);
             if (hasSecurityIdMapping)
             {
@@ -361,6 +407,11 @@ public class IngestionController : ControllerBase
 
         string ResolveGroupDisplay(TradeRecord trade)
         {
+            if (disableAllocationMerge)
+            {
+                return ResolveSymbolValue(trade);
+            }
+
             if (hasSecurityIdMapping)
             {
                 var secIdValue = GetFieldValue(trade, securityIdColumn);
@@ -371,6 +422,27 @@ public class IngestionController : ControllerBase
             }
 
             return ResolveSymbolValue(trade);
+        }
+
+        string BuildMergeFailureMessage(int groupTotal, string side, string display, IEnumerable<string> tags)
+        {
+            if (disableAllocationMerge)
+            {
+                return $"{groupTotal} allocation(s) failed to process. Missing required value(s): {string.Join(", ", tags)}.";
+            }
+
+            return $"{groupTotal} out of {allocationsSubmitted} allocations identified for group trade {side}/{display} failed to merge because it is missing required value(s): {string.Join(", ", tags)}. Allocations processing cancelled.";
+        }
+
+        string BuildSkippedSendMessage(int groupTotal, string side, string symbol)
+        {
+            if (disableAllocationMerge)
+            {
+                return $"Allocation {side}/{symbol} was built but cannot be sent because other allocations have error(s). Allocations processing cancelled.";
+            }
+
+            var failedAllocationsCount = allocationsSubmitted - groupTotal;
+            return $"{groupTotal} out of {allocationsSubmitted} allocations identified for group trade {side}/{symbol} were successfully merged. Fix message cannot be sent because {failedAllocationsCount} trades have error(s). Allocations processing cancelled.";
         }
 
         bool IsMissing(TradeRecord trade, string? column, bool required = true) =>
@@ -404,12 +476,25 @@ public class IngestionController : ControllerBase
             warnings.Add(missingRequiredMessage);
         }
 
-        var validTrades = trades.Where(t => !missingTrades.Contains(t)).ToList();
-        allocationsProcessed = validTrades.Count;
+        var invalidFieldTrades = trades
+            .Where(t => fieldIssuesByTrade.ContainsKey(t.Id))
+            .Except(missingTrades)
+            .ToList();
+
+        var validTrades = trades
+            .Where(t => !missingTrades.Contains(t) && !fieldIssuesByTrade.ContainsKey(t.Id))
+            .ToList();
+        allocationsProcessed = allocationsEligible - missingTrades.Count;
 
         if (validTrades.Count == 0)
         {
-            statusMessage = EnsureInvalidEquityNotice(missingRequiredMessage ?? "No valid allocations to process.");
+            failedAllocations = missingTrades.Count + invalidFieldTrades.Count;
+            var fieldIssueSummary = invalidFieldTrades.Any()
+                ? SummarizeErrors(fieldIssuesByTrade.Values.SelectMany(v => v))
+                : null;
+            statusMessage = EnsureInvalidEquityNotice(string.Join(" ", new[] { missingRequiredMessage, fieldIssueSummary }
+                .Where(m => !string.IsNullOrWhiteSpace(m))
+                .DefaultIfEmpty("No valid allocations to process.")));
             resultFailureMessage = statusMessage;
             return new IngestionPreviewResponse(
                 Status: statusMessage,
@@ -545,13 +630,53 @@ public class IngestionController : ControllerBase
             var meta = groupMeta.TryGetValue(kvp.Key, out var details)
                 ? details
                 : new { Side = string.Empty, Symbol = string.Empty, Display = string.Empty };
-            var message =
-                $"{groupTotal} out of {allocationsSubmitted} allocations identified for group trade {meta.Side}/{meta.Display} failed to merge because it is missing required value(s): {string.Join(", ", kvp.Value)}. Allocations processing cancelled.";
+            var message = BuildMergeFailureMessage(groupTotal, meta.Side, meta.Display, kvp.Value);
             AddGroupError(kvp.Key, message);
         }
 
         var fixBuilderLogger = _loggerFactory.CreateLogger<FixMessageBuilder>();
         var fixBuilder = new FixMessageBuilder(mapping, _fixConfig, fixBuilderLogger);
+
+        foreach (var trade in invalidFieldTrades)
+        {
+            var allocId = fixBuilder.NextAllocId();
+            var side = GetFieldValue(trade, sideColumn);
+            var symbol = ResolveSymbolValue(trade);
+            var sideDisplay = FixValueNormalizer.FormatSideDisplay(side);
+            var groupKey = $"INVALID:{trade.Id}";
+            var tradeDate = ResolveTradeDate(new[] { trade }, tradeDateColumn);
+            var reportAllocId = FormatAllocId(allocId, tradeDate);
+            allocIdToGroupKey[allocId] = groupKey;
+
+            var issues = fieldIssuesByTrade.TryGetValue(trade.Id, out var tradeIssues)
+                ? tradeIssues
+                : new List<string>();
+            foreach (var issue in issues)
+            {
+                AddGroupError(groupKey, issue);
+            }
+
+            var errorMessage = SummarizeErrors(issues);
+
+            failedAllocations++;
+            messages.Add(new FixMessagePreview(
+                AllocId: allocId,
+                Symbol: symbol,
+                Side: sideDisplay,
+                TradeCount: 1,
+                RawFix: string.Empty,
+                Status: "Failed",
+                ErrorMessage: errorMessage));
+            reportEntries.Add(new ValidationResult(
+                DateTime.UtcNow.ToString("o"),
+                mapping.ClientId ?? string.Empty,
+                reportAllocId,
+                side,
+                symbol,
+                "Failed",
+                string.Empty,
+                string.Empty));
+        }
 
         foreach (var symbolGroup in groupedBySymbolAndSide)
         {
@@ -602,7 +727,7 @@ public class IngestionController : ControllerBase
             preparedMessages.Add((mergedMsg, allocId, symbol, side, groupKey, symbolGroup.Count(), symbolGroup));
         }
 
-        bool canSendFixMessages = !dryRun && !missingTrades.Any() && buildFailures == 0;
+        bool canSendFixMessages = !dryRun && !missingTrades.Any() && !invalidFieldTrades.Any() && buildFailures == 0;
 
         foreach (var prepared in preparedMessages)
         {
@@ -672,9 +797,7 @@ public class IngestionController : ControllerBase
                 if (!groupErrors.ContainsKey(groupKey))
                 {
                     var groupTotal = groupTotals.TryGetValue(groupKey, out var count) ? count : tradeCount;
-                    var failedAllocationsCount = allocationsSubmitted - groupTotal;
-                    var cancelMessage =
-                        $"{groupTotal} out of {allocationsSubmitted} allocations identified for group trade {side}/{symbol} were successfully merged. Fix message cannot be sent because {failedAllocationsCount} trades have error(s). Allocations processing cancelled.";
+                    var cancelMessage = BuildSkippedSendMessage(groupTotal, side, symbol);
                     AddGroupError(groupKey, cancelMessage);
                 }
             }
@@ -741,7 +864,10 @@ public class IngestionController : ControllerBase
 
         successfulAllocations = Math.Max(allocationsEligible - failedAllocations, successfulAllocations);
 
-        resultSuccessMessage = $"{validTrades.Count} out of {allocationsSubmitted} allocations successfully processed and merged across {groupedBySymbolAndSide.Count} allocation group(s).";
+        var generatedFixMessages = preparedMessages.Count;
+        resultSuccessMessage = disableAllocationMerge
+            ? $"{successfulAllocations} out of {allocationsSubmitted} allocations successfully processed individually with merge disabled. {generatedFixMessages} Fix allocation message(s) generated."
+            : $"{successfulAllocations} out of {allocationsSubmitted} allocations successfully processed and merged across {generatedFixMessages} allocation group(s).";
         if (!dryRun && successfulFixMessages > 0)
         {
             resultSuccessMessage = $"{resultSuccessMessage} {successfulFixMessages} Fix message(s) successfully sent to {targetComp}.";
@@ -754,7 +880,7 @@ public class IngestionController : ControllerBase
         }
 
         var groupErrorSummary = groupErrors.Count > 0
-            ? string.Join(" | ", groupErrors.Values.SelectMany(v => v).Distinct())
+            ? SummarizeErrors(groupErrors.Values.SelectMany(v => v))
             : null;
 
         var failureMessage = string.Join(" ", new[] { missingRequiredMessage, fixSendFailureMessage, groupErrorSummary }
@@ -771,7 +897,7 @@ public class IngestionController : ControllerBase
         }
         statusMessage = string.IsNullOrWhiteSpace(resultFailureMessage) ? resultSuccessMessage : resultFailureMessage;
 
-        var hasProcessingErrors = missingTrades.Any() || buildFailures > 0 || failedFixMessages > 0 || groupErrors.Count > 0;
+        var hasProcessingErrors = missingTrades.Any() || invalidFieldTrades.Any() || buildFailures > 0 || failedFixMessages > 0 || groupErrors.Count > 0;
 
         string ResolveErrorDetails(ValidationResult entry)
         {
@@ -798,16 +924,16 @@ public class IngestionController : ControllerBase
 
         if (dryRun)
         {
-            var dryRunStatus = hasProcessingErrors ? "Failed" : "Valid. Not Sent";
             for (int i = 0; i < reportEntries.Count; i++)
             {
                 var entry = reportEntries[i];
                 var errorDetails = ResolveErrorDetails(entry);
                 var sideDisplay = FixValueNormalizer.FormatSideDisplay(entry.Side);
+                var isValid = string.IsNullOrWhiteSpace(errorDetails);
                 _validationReport.Add(entry with
                 {
                     Side = sideDisplay,
-                    ProcessingStatus = dryRunStatus,
+                    ProcessingStatus = isValid ? "Valid. Not Sent" : "Failed",
                     ErrorDetails = errorDetails
                 });
             }
@@ -817,8 +943,8 @@ public class IngestionController : ControllerBase
                 var updated = messages
                     .Select(m => m with
                     {
-                        Status = dryRunStatus,
-                        ErrorMessage = hasProcessingErrors ? resultFailureMessage ?? string.Empty : string.Empty
+                        Status = string.IsNullOrWhiteSpace(m.ErrorMessage) ? "Valid. Not Sent" : "Failed",
+                        ErrorMessage = m.ErrorMessage ?? string.Empty
                     })
                     .ToList();
                 messages = updated;
@@ -873,6 +999,68 @@ public class IngestionController : ControllerBase
         }
 
         return "No FIX session found for " + string.Join(" ", parts);
+    }
+
+    private static string SummarizeErrors(IEnumerable<string> errors)
+    {
+        var rawErrors = errors
+            .Where(error => !string.IsNullOrWhiteSpace(error))
+            .Select(error => error.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        if (rawErrors.Count == 0)
+        {
+            return string.Empty;
+        }
+
+        var aggregated = new List<string>();
+        var invalidValueGroups = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+        var numericIssueDetails = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var error in rawErrors)
+        {
+            var numericMatch = NumericIssueRegex.Match(error);
+            if (numericMatch.Success)
+            {
+                numericIssueDetails.Add(numericMatch.Groups["detail"].Value.Trim());
+                continue;
+            }
+
+            var match = InvalidValueRegex.Match(error);
+            if (!match.Success)
+            {
+                aggregated.Add(error);
+                continue;
+            }
+
+            var field = match.Groups["field"].Value.Trim();
+            var value = match.Groups["value"].Value.Trim();
+            if (!invalidValueGroups.TryGetValue(field, out var values))
+            {
+                values = new List<string>();
+                invalidValueGroups[field] = values;
+            }
+
+            if (!values.Contains(value, StringComparer.OrdinalIgnoreCase))
+            {
+                values.Add(value);
+            }
+        }
+
+        foreach (var group in invalidValueGroups)
+        {
+            aggregated.Add(group.Value.Count == 1
+                ? $"{group.Key} has an invalid value: {group.Value[0]}"
+                : $"{group.Key} has invalid value(s): {string.Join(", ", group.Value)}");
+        }
+
+        if (numericIssueDetails.Count > 0)
+        {
+            aggregated.Add($"Unexpected non-numeric value(s) found for numeric FIX fields: {string.Join(", ", numericIssueDetails)}.");
+        }
+
+        return string.Join(" | ", aggregated);
     }
 
     private static bool IsDefaultClient(string clientId) =>

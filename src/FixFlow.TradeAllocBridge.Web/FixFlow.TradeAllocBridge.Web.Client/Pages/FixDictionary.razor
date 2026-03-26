@@ -51,13 +51,13 @@
             }
         </div>
         <div class="form-row fix-suggest">
-            <label title="Type a few characters for suggestions, a tag number, or '*' to show all tags for the selected message.">Tag Number or Name</label>
+            <label title="Type a few characters for suggestions, a tag number, an enumeration value, or '*' to show all tags for the selected message.">Tag Number, Name or Enumeration</label>
             <input class="text-input"
                    value="@_tagInput"
                    @oninput="OnTagInput"
                    @onkeydown="OnTagKeyDown"
                    title="Tip: Type '*' to show all tags for the selected message."
-                   placeholder="Type tag number or a few characters for suggestions"
+                   placeholder="Type tag number, name, or enum value"
                    disabled="@(!_hasDictionary)" />
             @if (_isTagSuggestionOpen)
             {
@@ -66,9 +66,24 @@
                     {
                         var suggestion = _tagSuggestions[i];
                         <button type="button"
-                                class="fix-suggest-item @(i == _tagSuggestionIndex ? "is-active" : string.Empty)"
+                                class="fix-suggest-item @(suggestion.Depth > 0 ? "is-child" : string.Empty) @(i == _tagSuggestionIndex ? "is-active" : string.Empty)"
                                 @onclick="() => CommitTagSuggestion(suggestion)">
-                            @suggestion.Display
+                            @if (suggestion.Depth > 0)
+                            {
+                                <span class="fix-suggest-indent" aria-hidden="true">&#8627;</span>
+                            }
+                            <span class="fix-suggest-entry">
+                                <span>@suggestion.Display</span>
+                                @if (suggestion.Depth == 0 && suggestion.ComponentPaths.Count > 0)
+                                {
+                                    <span class="fix-suggest-meta">
+                                        @foreach (var component in suggestion.ComponentPaths)
+                                        {
+                                            <span class="fix-component-badge" title="@($"Defined through component {component}")">@component</span>
+                                        }
+                                    </span>
+                                }
+                            </span>
                         </button>
                     }
                 </div>
@@ -109,14 +124,35 @@
                         }
                         <span class="fix-tag-number">@single.Tag</span>
                     </span>
-                    <span>@single.Name</span>
+                    <span class="fix-tag-name-cell">
+                        <span>@single.Name</span>
+                        @if (single.ComponentPaths.Count > 0)
+                        {
+                            @foreach (var component in single.ComponentPaths)
+                            {
+                                <span class="fix-component-badge" title="@($"Defined through component {component}")">@component</span>
+                            }
+                        }
+                    </span>
                     <span>@single.Type</span>
                     <span>@(single.IsRequired.HasValue ? (single.IsRequired.Value ? "Yes" : "No") : "-")</span>
                 </div>
 
-                @if (SingleEnumResults.Count > 0 || SingleMessageResults.Count > 0)
+                @if (SingleEnumResults.Count > 0 || SingleMessageResults.Count > 0 || single.ComponentPaths.Count > 0)
                 {
                     <div class="table-row details fix-detail-box">
+                        @if (single.ComponentPaths.Count > 0)
+                        {
+                            <div class="fix-detail-block">
+                                <div class="fix-detail-label">Component:</div>
+                                <div class="fix-detail-list">
+                                    @foreach (var component in single.ComponentPaths)
+                                    {
+                                        <div>@component</div>
+                                    }
+                                </div>
+                            </div>
+                        }
                         @if (SingleEnumResults.Count > 0)
                         {
                             <div class="fix-detail-block">
@@ -177,13 +213,26 @@
                         }
                         <span class="fix-tag-number">@tag.Tag</span>
                     </span>
-                    <span>@tag.Name</span>
+                    <span class="fix-tag-name-cell">
+                        <span>@tag.Name</span>
+                        @if (tag.ComponentPaths.Count > 0)
+                        {
+                            @foreach (var component in tag.ComponentPaths)
+                            {
+                                <span class="fix-component-badge" title="@($"Defined through component {component}")">@component</span>
+                            }
+                        }
+                    </span>
                     <span>@tag.Type</span>
                     <span>@(tag.IsRequired.HasValue ? (tag.IsRequired.Value ? "Yes" : "No") : "-")</span>
                 </div>
-                @if (tag.Enums.Count > 0 || tag.MessagesUsing.Count > 0)
+                @if (tag.Enums.Count > 0 || tag.MessagesUsing.Count > 0 || tag.ComponentPaths.Count > 0)
                 {
                     <div class="table-row details">
+                        @if (tag.ComponentPaths.Count > 0)
+                        {
+                            <span class="muted">Component: @string.Join(", ", tag.ComponentPaths)</span>
+                        }
                         @if (tag.Enums.Count > 0)
                         {
                             <span class="mono">Valid Enumeration: @string.Join(", ", tag.Enums.Select(e => $"{e.Value}={e.Description}"))</span>
@@ -228,7 +277,7 @@
     private FixDictionaryMessageOption? _selectedMessage;
     private readonly List<FixDictionaryOption> _dictionaryOptions = new();
     private readonly List<FixDictionaryMessageOption> _messageSuggestions = new();
-    private readonly List<FixDictionaryFieldOption> _tagSuggestions = new();
+    private readonly List<FixDictionaryTagSuggestionOption> _tagSuggestions = new();
     private readonly List<FixDictionaryTag> _tagResults = new();
     private readonly List<FixDictionaryTag> _tagResultsBase = new();
     private int _messageSuggestionIndex = -1;
@@ -456,7 +505,7 @@
 
         try
         {
-            var response = await Http.GetFromJsonAsync<List<FixDictionaryFieldOption>>(
+            var response = await Http.GetFromJsonAsync<List<FixDictionaryTagSuggestionOption>>(
                 $"api/fix-dictionary/tag-suggestions?dictionary={Uri.EscapeDataString(_selectedDictionaryKey)}&messageInput={Uri.EscapeDataString(_messageInput)}&query={Uri.EscapeDataString(input)}");
             if (response is not null && response.Count > 0)
             {
@@ -561,9 +610,9 @@
         await UpdateSearchResultsAsync();
     }
 
-    private async Task CommitTagSuggestion(FixDictionaryFieldOption suggestion)
+    private async Task CommitTagSuggestion(FixDictionaryTagSuggestionOption suggestion)
     {
-        _tagInput = suggestion.Name;
+        _tagInput = suggestion.CommitValue;
         ResetSort();
         _isTagSuggestionOpen = false;
         _tagSuggestions.Clear();
@@ -593,6 +642,8 @@
         }
 
         _messageSuggestionIndex = UpdateSuggestionIndex(args.Key, _messageSuggestionIndex, _messageSuggestions.Count);
+        await InvokeAsync(StateHasChanged);
+        await JS.InvokeVoidAsync("fixflowTagSuggest.ensureActiveVisible");
     }
 
     private async Task OnTagKeyDown(KeyboardEventArgs args)
@@ -617,6 +668,8 @@
         }
 
         _tagSuggestionIndex = UpdateSuggestionIndex(args.Key, _tagSuggestionIndex, _tagSuggestions.Count);
+        await InvokeAsync(StateHasChanged);
+        await JS.InvokeVoidAsync("fixflowTagSuggest.ensureActiveVisible");
     }
 
     private static int UpdateSuggestionIndex(string key, int current, int count)

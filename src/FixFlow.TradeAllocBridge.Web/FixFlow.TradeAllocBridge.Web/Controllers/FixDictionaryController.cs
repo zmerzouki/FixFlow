@@ -90,7 +90,7 @@ public class FixDictionaryController : ControllerBase
     }
 
     [HttpGet("tag-suggestions")]
-    public ActionResult<IReadOnlyList<FixDictionaryFieldOption>> GetTagSuggestions(
+    public ActionResult<IReadOnlyList<FixDictionaryTagSuggestionOption>> GetTagSuggestions(
         [FromQuery] string? dictionary,
         [FromQuery] string? messageInput,
         [FromQuery] string? query)
@@ -98,25 +98,20 @@ public class FixDictionaryController : ControllerBase
         var data = GetDictionary(dictionary, out _);
         if (data == null)
         {
-            return Ok(Array.Empty<FixDictionaryFieldOption>());
+            return Ok(Array.Empty<FixDictionaryTagSuggestionOption>());
         }
 
         var input = (query ?? string.Empty).Trim();
         if (string.IsNullOrWhiteSpace(input) || input.All(char.IsDigit) || !char.IsLetter(input[0]))
         {
-            return Ok(Array.Empty<FixDictionaryFieldOption>());
+            return Ok(Array.Empty<FixDictionaryTagSuggestionOption>());
         }
 
         var selectedMessage = ResolveMessageOption(data, messageInput);
         var options = GetCurrentFieldOptions(data, selectedMessage);
 
-        var matches = input.Length == 1
-            ? options.Where(option => option.Name.StartsWith(input, StringComparison.OrdinalIgnoreCase))
-            : options.Where(option => option.Name.Contains(input, StringComparison.OrdinalIgnoreCase));
-
-        var results = matches
+        var results = BuildTagSuggestions(data, selectedMessage, options, input)
             .Take(20)
-            .Select(option => option.ToShared())
             .ToList();
 
         return Ok(results);
@@ -206,6 +201,7 @@ public class FixDictionaryController : ControllerBase
             ? required
             : new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         data.MessageFieldDepths.TryGetValue(selectedMessage.Name, out var depthMap);
+        data.MessageFieldComponents.TryGetValue(selectedMessage.Name, out var componentMap);
         data.MessageFieldOrder.TryGetValue(selectedMessage.Name, out var orderList);
         Dictionary<string, int>? orderMap = null;
         if (orderList != null && orderList.Count > 0)
@@ -248,6 +244,9 @@ public class FixDictionaryController : ControllerBase
                 requiredFields.Contains(option.Name),
                 option.Enums,
                 Array.Empty<string>(),
+                componentMap != null && componentMap.TryGetValue(option.Name, out var components)
+                    ? components
+                    : Array.Empty<string>(),
                 depth,
                 order));
         }
@@ -322,6 +321,12 @@ public class FixDictionaryController : ControllerBase
             return Ok(BuildTagResults(data, new List<FieldOption> { exact }, selectedMessage));
         }
 
+        var exactEnumMatches = FindEnumMatchedFields(options, input, exactOnly: true);
+        if (exactEnumMatches.Count == 1)
+        {
+            return Ok(BuildTagResults(data, exactEnumMatches, selectedMessage));
+        }
+
         if (input.Length >= 2)
         {
             var matches = options
@@ -330,6 +335,12 @@ public class FixDictionaryController : ControllerBase
             if (matches.Count == 1)
             {
                 return Ok(BuildTagResults(data, matches, selectedMessage));
+            }
+
+            var enumMatches = FindEnumMatchedFields(options, input, exactOnly: false);
+            if (enumMatches.Count == 1)
+            {
+                return Ok(BuildTagResults(data, enumMatches, selectedMessage));
             }
         }
 
@@ -416,7 +427,16 @@ public class FixDictionaryController : ControllerBase
             var messageRequiredFields = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
             var messageFieldDepths = new Dictionary<string, Dictionary<string, int>>(StringComparer.OrdinalIgnoreCase);
             var messageFieldOrder = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+            var messageFieldComponents = new Dictionary<string, Dictionary<string, List<string>>>(StringComparer.OrdinalIgnoreCase);
             var fieldMessageUsage = new Dictionary<string, List<MessageOption>>(StringComparer.OrdinalIgnoreCase);
+            var componentsByName = (root.Element("components")?.Elements("component") ?? Enumerable.Empty<XElement>())
+                .Select(component => new
+                {
+                    Name = (string?)component.Attribute("name"),
+                    Element = component
+                })
+                .Where(component => !string.IsNullOrWhiteSpace(component.Name))
+                .ToDictionary(component => component.Name!, component => component.Element, StringComparer.OrdinalIgnoreCase);
 
             foreach (var message in root.Element("messages")?.Elements("message") ?? Enumerable.Empty<XElement>())
             {
@@ -438,16 +458,27 @@ public class FixDictionaryController : ControllerBase
 
                 var fieldNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
                 var requiredFields = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                CollectFieldNames(message, fieldNames, requiredFields);
                 var fieldDepths = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
-                CollectFieldDepths(message, fieldDepths, 0);
                 var fieldOrder = new List<string>();
-                CollectFieldOrder(message, fieldOrder, new HashSet<string>(StringComparer.OrdinalIgnoreCase));
+                var fieldComponents = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+                CollectFieldMetadata(
+                    message,
+                    componentsByName,
+                    fieldNames,
+                    requiredFields,
+                    fieldDepths,
+                    fieldOrder,
+                    new HashSet<string>(StringComparer.OrdinalIgnoreCase),
+                    fieldComponents,
+                    0,
+                    Array.Empty<string>(),
+                    new HashSet<string>(StringComparer.OrdinalIgnoreCase));
 
                 messageFields[name] = fieldNames;
                 messageRequiredFields[name] = requiredFields;
                 messageFieldDepths[name] = fieldDepths;
                 messageFieldOrder[name] = fieldOrder;
+                messageFieldComponents[name] = fieldComponents;
 
                 foreach (var fieldName in fieldNames)
                 {
@@ -469,7 +500,7 @@ public class FixDictionaryController : ControllerBase
             var header = root.Element("header");
             if (header != null)
             {
-                CollectHeaderFieldNames(header, headerFieldNames, headerRequiredFields);
+                CollectHeaderFieldNames(header, headerFieldNames, headerRequiredFields, componentsByName);
             }
 
             var headerFields = new List<FieldOption>();
@@ -490,6 +521,7 @@ public class FixDictionaryController : ControllerBase
                 messageRequiredFields,
                 messageFieldDepths,
                 messageFieldOrder,
+                messageFieldComponents,
                 fieldMessageUsage,
                 headerFields,
                 headerRequiredFields);
@@ -509,7 +541,18 @@ public class FixDictionaryController : ControllerBase
         }
     }
 
-    private static void CollectFieldNames(XElement element, HashSet<string> fieldNames, HashSet<string> requiredFields)
+    private static void CollectFieldMetadata(
+        XElement element,
+        IReadOnlyDictionary<string, XElement> componentsByName,
+        HashSet<string> fieldNames,
+        HashSet<string> requiredFields,
+        Dictionary<string, int> fieldDepths,
+        List<string> orderedNames,
+        HashSet<string> seenOrder,
+        Dictionary<string, List<string>> fieldComponents,
+        int depth,
+        IReadOnlyList<string> componentPath,
+        HashSet<string> activeComponents)
     {
         foreach (var child in element.Elements())
         {
@@ -517,14 +560,24 @@ public class FixDictionaryController : ControllerBase
             if (string.Equals(local, "field", StringComparison.OrdinalIgnoreCase))
             {
                 var name = (string?)child.Attribute("name");
-                if (!string.IsNullOrWhiteSpace(name))
+                if (string.IsNullOrWhiteSpace(name))
                 {
-                    fieldNames.Add(name);
-                    if (IsRequired(child))
-                    {
-                        requiredFields.Add(name);
-                    }
+                    continue;
                 }
+
+                fieldNames.Add(name);
+                if (IsRequired(child))
+                {
+                    requiredFields.Add(name);
+                }
+
+                SetDepth(fieldDepths, name, depth);
+                if (seenOrder.Add(name))
+                {
+                    orderedNames.Add(name);
+                }
+
+                AddComponentPath(fieldComponents, name, componentPath);
             }
             else if (string.Equals(local, "group", StringComparison.OrdinalIgnoreCase))
             {
@@ -536,61 +589,57 @@ public class FixDictionaryController : ControllerBase
                     {
                         requiredFields.Add(groupName);
                     }
-                }
 
-                CollectFieldNames(child, fieldNames, requiredFields);
-            }
-        }
-    }
-
-    private static void CollectFieldDepths(XElement element, Dictionary<string, int> fieldDepths, int depth)
-    {
-        foreach (var child in element.Elements())
-        {
-            var local = child.Name.LocalName;
-            if (string.Equals(local, "field", StringComparison.OrdinalIgnoreCase))
-            {
-                var name = (string?)child.Attribute("name");
-                if (!string.IsNullOrWhiteSpace(name))
-                {
-                    SetDepth(fieldDepths, name, depth);
-                }
-            }
-            else if (string.Equals(local, "group", StringComparison.OrdinalIgnoreCase))
-            {
-                var groupName = (string?)child.Attribute("name");
-                if (!string.IsNullOrWhiteSpace(groupName))
-                {
                     SetDepth(fieldDepths, groupName, depth);
+                    if (seenOrder.Add(groupName))
+                    {
+                        orderedNames.Add(groupName);
+                    }
+
+                    AddComponentPath(fieldComponents, groupName, componentPath);
                 }
 
-                CollectFieldDepths(child, fieldDepths, depth + 1);
+                CollectFieldMetadata(
+                    child,
+                    componentsByName,
+                    fieldNames,
+                    requiredFields,
+                    fieldDepths,
+                    orderedNames,
+                    seenOrder,
+                    fieldComponents,
+                    depth + 1,
+                    componentPath,
+                    activeComponents);
             }
-        }
-    }
-
-    private static void CollectFieldOrder(XElement element, List<string> orderedNames, HashSet<string> seen)
-    {
-        foreach (var child in element.Elements())
-        {
-            var local = child.Name.LocalName;
-            if (string.Equals(local, "field", StringComparison.OrdinalIgnoreCase))
+            else if (string.Equals(local, "component", StringComparison.OrdinalIgnoreCase))
             {
-                var name = (string?)child.Attribute("name");
-                if (!string.IsNullOrWhiteSpace(name) && seen.Add(name))
+                var componentName = (string?)child.Attribute("name");
+                if (string.IsNullOrWhiteSpace(componentName) ||
+                    !componentsByName.TryGetValue(componentName, out var componentElement) ||
+                    !activeComponents.Add(componentName))
                 {
-                    orderedNames.Add(name);
-                }
-            }
-            else if (string.Equals(local, "group", StringComparison.OrdinalIgnoreCase))
-            {
-                var groupName = (string?)child.Attribute("name");
-                if (!string.IsNullOrWhiteSpace(groupName) && seen.Add(groupName))
-                {
-                    orderedNames.Add(groupName);
+                    continue;
                 }
 
-                CollectFieldOrder(child, orderedNames, seen);
+                var nextPath = componentPath.Count == 0
+                    ? new[] { componentName }
+                    : componentPath.Concat(new[] { componentName }).ToArray();
+
+                CollectFieldMetadata(
+                    componentElement,
+                    componentsByName,
+                    fieldNames,
+                    requiredFields,
+                    fieldDepths,
+                    orderedNames,
+                    seenOrder,
+                    fieldComponents,
+                    depth,
+                    nextPath,
+                    activeComponents);
+
+                activeComponents.Remove(componentName);
             }
         }
     }
@@ -610,8 +659,11 @@ public class FixDictionaryController : ControllerBase
     private static void CollectHeaderFieldNames(
         XElement element,
         List<string> fieldNames,
-        HashSet<string> requiredFields)
+        HashSet<string> requiredFields,
+        IReadOnlyDictionary<string, XElement> componentsByName,
+        HashSet<string>? activeComponents = null)
     {
+        activeComponents ??= new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var child in element.Elements())
         {
             var local = child.Name.LocalName;
@@ -639,8 +691,44 @@ public class FixDictionaryController : ControllerBase
                     requiredFields.Add(groupName);
                 }
 
-                CollectHeaderFieldNames(child, fieldNames, requiredFields);
+                CollectHeaderFieldNames(child, fieldNames, requiredFields, componentsByName, activeComponents);
             }
+            else if (string.Equals(local, "component", StringComparison.OrdinalIgnoreCase))
+            {
+                var componentName = (string?)child.Attribute("name");
+                if (string.IsNullOrWhiteSpace(componentName) ||
+                    !componentsByName.TryGetValue(componentName, out var componentElement) ||
+                    !activeComponents.Add(componentName))
+                {
+                    continue;
+                }
+
+                CollectHeaderFieldNames(componentElement, fieldNames, requiredFields, componentsByName, activeComponents);
+                activeComponents.Remove(componentName);
+            }
+        }
+    }
+
+    private static void AddComponentPath(
+        Dictionary<string, List<string>> fieldComponents,
+        string fieldName,
+        IReadOnlyList<string> componentPath)
+    {
+        if (componentPath.Count == 0)
+        {
+            return;
+        }
+
+        var path = string.Join(" / ", componentPath);
+        if (!fieldComponents.TryGetValue(fieldName, out var paths))
+        {
+            paths = new List<string>();
+            fieldComponents[fieldName] = paths;
+        }
+
+        if (!paths.Contains(path, StringComparer.OrdinalIgnoreCase))
+        {
+            paths.Add(path);
         }
     }
 
@@ -695,6 +783,122 @@ public class FixDictionaryController : ControllerBase
         }
 
         return data.Fields;
+    }
+
+    private static IReadOnlyList<FixDictionaryTagSuggestionOption> BuildTagSuggestions(
+        FixDictionaryData data,
+        MessageOption? selectedMessage,
+        IReadOnlyList<FieldOption> options,
+        string input)
+    {
+        var results = new List<FixDictionaryTagSuggestionOption>();
+        var addedTags = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var useStartsWith = input.Length == 1;
+        IReadOnlyDictionary<string, List<string>>? componentMap = null;
+        if (selectedMessage != null &&
+            data.MessageFieldComponents.TryGetValue(selectedMessage.Name, out var components))
+        {
+            componentMap = components;
+        }
+
+        foreach (var option in options)
+        {
+            var tagMatches = useStartsWith
+                ? option.Name.StartsWith(input, StringComparison.OrdinalIgnoreCase)
+                : option.Name.Contains(input, StringComparison.OrdinalIgnoreCase);
+            var matchingEnums = option.Enums
+                .Where(enumValue => EnumMatches(enumValue, input, useStartsWith))
+                .ToList();
+            IReadOnlyList<string> componentPaths = componentMap != null && componentMap.TryGetValue(option.Name, out var paths)
+                ? paths
+                : Array.Empty<string>();
+
+            if (!tagMatches && matchingEnums.Count == 0)
+            {
+                continue;
+            }
+
+            if (addedTags.Add(option.Name))
+            {
+                results.Add(new FixDictionaryTagSuggestionOption(
+                    option.Name,
+                    option.Number,
+                    option.Type,
+                    option.Display,
+                    option.Name,
+                    componentPaths,
+                    0,
+                    false));
+            }
+
+            foreach (var enumValue in matchingEnums)
+            {
+                var enumDisplay = string.IsNullOrWhiteSpace(enumValue.Description)
+                    ? enumValue.Value
+                    : $"{enumValue.Value}={enumValue.Description}";
+                results.Add(new FixDictionaryTagSuggestionOption(
+                    option.Name,
+                    option.Number,
+                    option.Type,
+                    enumDisplay,
+                    option.Name,
+                    componentPaths,
+                    1,
+                    true));
+            }
+        }
+
+        return results;
+    }
+
+    private static List<FieldOption> FindEnumMatchedFields(
+        IReadOnlyList<FieldOption> options,
+        string input,
+        bool exactOnly)
+    {
+        var matches = new List<FieldOption>();
+        foreach (var option in options)
+        {
+            if (!option.Enums.Any(enumValue => EnumMatches(enumValue, input, useStartsWith: false, exactOnly)))
+            {
+                continue;
+            }
+
+            matches.Add(option);
+        }
+
+        return matches;
+    }
+
+    private static bool EnumMatches(
+        FixDictionaryEnumValue enumValue,
+        string input,
+        bool useStartsWith,
+        bool exactOnly = false)
+    {
+        var value = enumValue.Value ?? string.Empty;
+        var description = enumValue.Description ?? string.Empty;
+        var combined = string.IsNullOrWhiteSpace(description)
+            ? value
+            : $"{value}={description}";
+
+        if (exactOnly)
+        {
+            return string.Equals(value, input, StringComparison.OrdinalIgnoreCase) ||
+                   string.Equals(description, input, StringComparison.OrdinalIgnoreCase) ||
+                   string.Equals(combined, input, StringComparison.OrdinalIgnoreCase);
+        }
+
+        if (useStartsWith)
+        {
+            return value.StartsWith(input, StringComparison.OrdinalIgnoreCase) ||
+                   description.StartsWith(input, StringComparison.OrdinalIgnoreCase) ||
+                   combined.StartsWith(input, StringComparison.OrdinalIgnoreCase);
+        }
+
+        return value.Contains(input, StringComparison.OrdinalIgnoreCase) ||
+               description.Contains(input, StringComparison.OrdinalIgnoreCase) ||
+               combined.Contains(input, StringComparison.OrdinalIgnoreCase);
     }
 
     private static FieldOption? FindFieldFromInput(FixDictionaryData data, MessageOption? selectedMessage, string input)
@@ -765,6 +969,7 @@ public class FixDictionaryController : ControllerBase
         HashSet<string>? requiredFields = null;
         IReadOnlyDictionary<string, int>? depthMap = null;
         IReadOnlyDictionary<string, int>? orderMap = null;
+        IReadOnlyDictionary<string, List<string>>? componentMap = null;
         if (selectedMessage != null &&
             data.MessageRequiredFields.TryGetValue(selectedMessage.Name, out var required))
         {
@@ -790,6 +995,11 @@ public class FixDictionaryController : ControllerBase
             }
 
             orderMap = map;
+        }
+        if (selectedMessage != null &&
+            data.MessageFieldComponents.TryGetValue(selectedMessage.Name, out var components))
+        {
+            componentMap = components;
         }
 
         var results = new List<FixDictionaryTag>();
@@ -829,6 +1039,9 @@ public class FixDictionaryController : ControllerBase
                 requiredFields == null ? null : requiredFields.Contains(option.Name),
                 option.Enums,
                 messages,
+                componentMap != null && componentMap.TryGetValue(option.Name, out var paths)
+                    ? (IReadOnlyList<string>)paths
+                    : Array.Empty<string>(),
                 depth,
                 order));
         }
@@ -854,6 +1067,7 @@ public class FixDictionaryController : ControllerBase
                 data.HeaderRequiredFields.Contains(option.Name),
                 option.Enums,
                 Array.Empty<string>(),
+                Array.Empty<string>(),
                 0,
                 results.Count));
         }
@@ -870,6 +1084,7 @@ public class FixDictionaryController : ControllerBase
         IReadOnlyDictionary<string, HashSet<string>> MessageRequiredFields,
         IReadOnlyDictionary<string, Dictionary<string, int>> MessageFieldDepths,
         IReadOnlyDictionary<string, List<string>> MessageFieldOrder,
+        IReadOnlyDictionary<string, Dictionary<string, List<string>>> MessageFieldComponents,
         IReadOnlyDictionary<string, List<MessageOption>> FieldMessageUsage,
         IReadOnlyList<FieldOption> HeaderFields,
         HashSet<string> HeaderRequiredFields);
