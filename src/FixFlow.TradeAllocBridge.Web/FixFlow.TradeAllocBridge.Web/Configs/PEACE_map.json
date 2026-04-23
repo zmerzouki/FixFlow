@@ -1,0 +1,39 @@
+{
+  "clientId": "PEACE",
+  "organizationName": "PEACE CORP",
+  "senderDomain": "PEACE.COM",
+  "delimiter": ";",
+  "tradeAllocations": {
+    "CUSIP": "48",
+    "Symbol": "55",
+    "Side": "54",
+    "Trade Date": "75",
+    "Settlement Date": "64",
+    "Custodian Name": "79",
+    "Quantity": "80",
+    "Average Price": "153",
+    "Total Commissions": "12"
+  },
+  "defaultTagValues": {
+    "13": "3",
+    "138": "USD",
+    "139": "7"
+  },
+  "fieldDefaultTagValues": {
+    "Total Commissions": {
+      "138": "USD",
+      "139": "2"
+    }
+  },
+  "predefined": {
+    "49": "FIXFLOW",
+    "50": "FIXFLOWWEB",
+    "56": "BROKER",
+    "57": "BROKER_SUB",
+    "115": "BRKR",
+    "128": "BROKER_ALLOC",
+    "1": null
+  },
+  "dateValidated": "4/22/2026 2:18 PM",
+  "disableAllocationMerge": false
+}

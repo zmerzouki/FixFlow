@@ -19,7 +19,7 @@ This file replaces the auto-created 2026-01-12 draft and folds in the material r
   - Direct Ingestion, map validation, duplicate detection, delete confirmation, and result reporting were expanded
 - Allocation processing is stricter now:
   - validation/reporting was improved for FIX send failures and numeric/value normalization errors
-  - `DisableAllocationMerge` allows per-row allocation processing instead of symbol/side merging
+  - `DisableAllocationMerge` allows per-row allocation processing instead of Side/SecurityID or Symbol merging
   - validation report entries use `AllocID_TradeDate` formatting and deduping
 - FIX metadata support expanded:
   - `cfg/FIX44.xml` and `cfg/REDUCED_FIX42.xml` were added

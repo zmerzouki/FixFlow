@@ -113,7 +113,7 @@ namespace FixFlow.TradeAllocBridge.CLI
         {
             if (string.IsNullOrWhiteSpace(config.Fix.SessionQualifier))
             {
-                config.Fix.SessionQualifier = builder.Configuration["FixSessionQualifiers:Service"] ?? "FixFlowService";
+                config.Fix.SessionQualifier = builder.Configuration["FixSessionQualifiers:Service"] ?? "FIXFLOWSERVICE";
             }
 
             builder.Services.AddSingleton(config);
@@ -449,6 +449,32 @@ namespace FixFlow.TradeAllocBridge.CLI
 
                     if (groupedBySymbolAndSide.Count == 0)
                     {
+                        foreach (var trade in missingTrades)
+                        {
+                            var missingTradeTags = new List<string>();
+                            if (IsMissing(trade, sideColumn)) missingTradeTags.Add("Side (tag 54)");
+                            if (IsMissing(trade, symbolColumn)) missingTradeTags.Add("Symbol (tag 55)");
+                            if (IsMissing(trade, accountColumn)) missingTradeTags.Add("AllocAccount (tag 79)");
+                            if (IsMissing(trade, qtyColumn)) missingTradeTags.Add("AllocShares (tag 80)");
+                            if (IsMissing(trade, priceColumn)) missingTradeTags.Add("AllocAvgPx (tag 153)");
+
+                            report.Add(new ValidationResult(
+                                DateTime.UtcNow.ToString("o"),
+                                mapping.ClientId ?? string.Empty,
+                                FormatAllocId($"MISSING_{trade.Id}", ResolveTradeDate(new[] { trade }, tradeDateColumn)),
+                                FixValueNormalizer.FormatSideDisplay(ResolveSideValue(trade)),
+                                ResolveSymbolValue(trade),
+                                "Failed",
+                                $"Missing required value(s): {string.Join(", ", missingTradeTags)}.",
+                                string.Empty,
+                                "Email",
+                                dryRun,
+                                1,
+                                ValidationMetrics.CalculateGrossAmount(trade, qtyColumn, priceColumn)
+                            ));
+                        }
+
+                        report.Save();
                         Console.WriteLine("No valid allocations to process after required field validation.");
                         continue;
                     }
@@ -519,6 +545,31 @@ namespace FixFlow.TradeAllocBridge.CLI
                         AddGroupError(kvp.Key, message);
                     }
 
+                    foreach (var trade in missingTrades)
+                    {
+                        var missingTradeTags = new List<string>();
+                        if (IsMissing(trade, sideColumn)) missingTradeTags.Add("Side (tag 54)");
+                        if (IsMissing(trade, symbolColumn)) missingTradeTags.Add("Symbol (tag 55)");
+                        if (IsMissing(trade, accountColumn)) missingTradeTags.Add("AllocAccount (tag 79)");
+                        if (IsMissing(trade, qtyColumn)) missingTradeTags.Add("AllocShares (tag 80)");
+                        if (IsMissing(trade, priceColumn)) missingTradeTags.Add("AllocAvgPx (tag 153)");
+
+                        reportEntries.Add(new ValidationResult(
+                            DateTime.UtcNow.ToString("o"),
+                            mapping.ClientId ?? string.Empty,
+                            FormatAllocId($"MISSING_{trade.Id}", ResolveTradeDate(new[] { trade }, tradeDateColumn)),
+                            ResolveSideValue(trade),
+                            ResolveSymbolValue(trade),
+                            "Failed",
+                            $"Missing required value(s): {string.Join(", ", missingTradeTags)}.",
+                            string.Empty,
+                            "Email",
+                            dryRun,
+                            1,
+                            ValidationMetrics.CalculateGrossAmount(trade, qtyColumn, priceColumn)
+                        ));
+                    }
+
                     var preparedMessages = new List<(FixMessage Message, string AllocId, string Symbol, string Side, string GroupKey, int TradeCount, IEnumerable<TradeRecord> Trades)>();
                     int buildFailures = 0;
                     var allocIdToGroupKey = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
@@ -559,7 +610,11 @@ namespace FixFlow.TradeAllocBridge.CLI
                                 symbol,
                                 "Failed",
                                 string.Empty,
-                                string.Empty
+                                string.Empty,
+                                "Email",
+                                dryRun,
+                                symbolGroup.Count(),
+                                ValidationMetrics.CalculateGrossAmount(symbolGroup, qtyColumn, priceColumn)
                             ));
                             AddGroupError(groupKey, ex.Message);
                             buildFailures++;
@@ -681,7 +736,11 @@ namespace FixFlow.TradeAllocBridge.CLI
                             symbol,
                             status,
                             string.Empty,
-                            rawFix
+                            rawFix,
+                            "Email",
+                            dryRun,
+                            tradeCount,
+                            ValidationMetrics.CalculateGrossAmount(prepared.Trades, qtyColumn, priceColumn)
                         ));
                     }
 
@@ -724,6 +783,11 @@ namespace FixFlow.TradeAllocBridge.CLI
                                         errorDetails = string.Join(" | ", details);
                                     }
                                 }
+                            }
+
+                            if (string.IsNullOrWhiteSpace(errorDetails))
+                            {
+                                errorDetails = entry.ErrorDetails;
                             }
 
                             var sideDisplay = FixValueNormalizer.FormatSideDisplay(entry.Side);

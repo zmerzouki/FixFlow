@@ -6,6 +6,7 @@ namespace FixFlow.TradeAllocBridge.Core.Reporting;
 
 public class ValidationReport
 {
+    private const string ReportHeader = "DateTime,ClientID,AllocID,Side,Symbol,ProcessingStatus,ErrorDetails,RawFixMessage,Source,IsDryRun,TradeCount,GrossAmount";
     private readonly string _reportPath;
     private readonly List<ValidationResult> _entries = new();
     private readonly ILogger<ValidationReport> _logger;
@@ -19,7 +20,11 @@ public class ValidationReport
 
         if (!File.Exists(_reportPath))
         {
-            File.WriteAllText(_reportPath, "DateTime,ClientID,AllocID,Side,Symbol,ProcessingStatus,ErrorDetails,RawFixMessage\n");
+            File.WriteAllText(_reportPath, ReportHeader + Environment.NewLine);
+        }
+        else
+        {
+            EnsureCurrentHeader();
         }
     }
 
@@ -38,7 +43,7 @@ public class ValidationReport
         foreach (var entry in _entries)
         {
             var key = BuildKey(entry.DateTime, entry.ClientId, entry.AllocID, entry.Side, entry.Symbol,
-                entry.ProcessingStatus, entry.ErrorDetails, entry.RawFixMessage);
+                entry.ProcessingStatus, entry.ErrorDetails, entry.RawFixMessage, entry.Source, entry.IsDryRun, entry.TradeCount, entry.GrossAmount);
             if (existingKeys.Contains(key))
             {
                 continue;
@@ -54,7 +59,11 @@ public class ValidationReport
                 EscapeCsv(entry.Symbol),
                 EscapeCsv(entry.ProcessingStatus),
                 EscapeCsv(entry.ErrorDetails),
-                EscapeCsv(entry.RawFixMessage)
+                EscapeCsv(entry.RawFixMessage),
+                EscapeCsv(entry.Source),
+                EscapeCsv(entry.IsDryRun ? "true" : "false"),
+                EscapeCsv(entry.TradeCount.ToString(CultureInfo.InvariantCulture)),
+                EscapeCsv(entry.GrossAmount.ToString(CultureInfo.InvariantCulture))
             }));
         }
 
@@ -88,7 +97,11 @@ public class ValidationReport
                     fields[4],
                     fields[5],
                     fields[6],
-                    fields[7]));
+                    fields[7],
+                    fields.Count > 8 ? fields[8] : string.Empty,
+                    fields.Count > 9 && bool.TryParse(fields[9], out var isDryRun) ? isDryRun : false,
+                    fields.Count > 10 && int.TryParse(fields[10], NumberStyles.Integer, CultureInfo.InvariantCulture, out var tradeCount) ? tradeCount : 1,
+                    fields.Count > 11 && decimal.TryParse(fields[11], NumberStyles.Any, CultureInfo.InvariantCulture, out var grossAmount) ? grossAmount : 0m));
             }
         }
         catch (Exception ex)
@@ -107,7 +120,11 @@ public class ValidationReport
         string symbol,
         string processingStatus,
         string errorDetails,
-        string rawFixMessage)
+        string rawFixMessage,
+        string source,
+        bool isDryRun,
+        int tradeCount,
+        decimal grossAmount)
     {
         return string.Join("|", new[]
         {
@@ -118,7 +135,11 @@ public class ValidationReport
             symbol,
             processingStatus,
             errorDetails,
-            rawFixMessage
+            rawFixMessage,
+            source,
+            isDryRun ? "true" : "false",
+            tradeCount.ToString(CultureInfo.InvariantCulture),
+            grossAmount.ToString(CultureInfo.InvariantCulture)
         });
     }
 
@@ -166,6 +187,31 @@ public class ValidationReport
         var normalized = value ?? string.Empty;
         return $"\"{normalized.Replace("\"", "\"\"")}\"";
     }
+
+    private void EnsureCurrentHeader()
+    {
+        try
+        {
+            var lines = File.ReadAllLines(_reportPath);
+            if (lines.Length == 0)
+            {
+                File.WriteAllText(_reportPath, ReportHeader + Environment.NewLine);
+                return;
+            }
+
+            if (string.Equals(lines[0].Trim(), ReportHeader, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            lines[0] = ReportHeader;
+            File.WriteAllLines(_reportPath, lines);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to normalize validation report header for {Path}", _reportPath);
+        }
+    }
 }
 
 public record ValidationResult(
@@ -176,5 +222,9 @@ public record ValidationResult(
     string Symbol,
     string ProcessingStatus,
     string ErrorDetails,
-    string RawFixMessage
+    string RawFixMessage,
+    string Source = "",
+    bool IsDryRun = false,
+    int TradeCount = 1,
+    decimal GrossAmount = 0m
 );

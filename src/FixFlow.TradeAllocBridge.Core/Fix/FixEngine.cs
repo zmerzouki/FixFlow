@@ -98,7 +98,11 @@ namespace FixFlow.TradeAllocBridge.Core.Fix
                 var senderSubId = string.IsNullOrWhiteSpace(SenderSubId) ? SessionID.NOT_SET : SenderSubId;
                 var targetSubId = string.IsNullOrWhiteSpace(TargetSubId) ? SessionID.NOT_SET : TargetSubId;
                 var sessionId = new SessionID("FIX.4.2", Sender, senderSubId, Target, targetSubId);
-                if (existingSettings.Has(sessionId))
+                var sessionAlreadyExists = existingSettings
+                    .GetSessions()
+                    .Any(existingSession => SessionIdsEquivalent(existingSession, sessionId));
+
+                if (sessionAlreadyExists)
                 {
                     _logger.LogInformation("ℹ️ Session {Sender}->{Target} already exists, skipping append.", Sender, Target);
                     continue;
@@ -164,7 +168,23 @@ namespace FixFlow.TradeAllocBridge.Core.Fix
                 .Where(sessionId => string.Equals(sessionId.SenderSubID, qualifier, StringComparison.OrdinalIgnoreCase))
                 .ToList();
 
-            if (matchingSessions.Count == 0)
+            var distinctMatchingSessions = matchingSessions
+                .GroupBy(GetCanonicalSessionKey, StringComparer.OrdinalIgnoreCase)
+                .Select(group =>
+                {
+                    if (group.Count() > 1)
+                    {
+                        _logger.LogWarning(
+                            "⚠️ Found duplicate FIX sessions for {Session}. Using the first entry and ignoring {DuplicateCount} duplicate(s).",
+                            group.Key,
+                            group.Count() - 1);
+                    }
+
+                    return group.First();
+                })
+                .ToList();
+
+            if (distinctMatchingSessions.Count == 0)
             {
                 _logger.LogWarning(
                     "⚠️ No FIX sessions matched SessionQualifier {Qualifier} in {Config}. Falling back to all sessions.",
@@ -173,17 +193,45 @@ namespace FixFlow.TradeAllocBridge.Core.Fix
                 return allSettings;
             }
 
-            foreach (var sessionId in matchingSessions)
+            foreach (var sessionId in distinctMatchingSessions)
             {
                 filtered.Set(sessionId, new SettingsDictionary("SESSION", allSettings.Get(sessionId)));
             }
 
             _logger.LogInformation(
                 "✅ Loaded {Count} FIX session(s) matching SessionQualifier {Qualifier}.",
-                matchingSessions.Count,
+                distinctMatchingSessions.Count,
                 qualifier);
 
             return filtered;
+        }
+
+        private static bool SessionIdsEquivalent(SessionID left, SessionID right)
+        {
+            return string.Equals(left.BeginString, right.BeginString, StringComparison.OrdinalIgnoreCase)
+                && string.Equals(left.SenderCompID, right.SenderCompID, StringComparison.OrdinalIgnoreCase)
+                && string.Equals(NormalizeSessionPart(left.SenderSubID), NormalizeSessionPart(right.SenderSubID), StringComparison.OrdinalIgnoreCase)
+                && string.Equals(left.TargetCompID, right.TargetCompID, StringComparison.OrdinalIgnoreCase)
+                && string.Equals(NormalizeSessionPart(left.TargetSubID), NormalizeSessionPart(right.TargetSubID), StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static string GetCanonicalSessionKey(SessionID sessionId)
+        {
+            return string.Join("|", new[]
+            {
+                sessionId.BeginString,
+                sessionId.SenderCompID,
+                NormalizeSessionPart(sessionId.SenderSubID),
+                sessionId.TargetCompID,
+                NormalizeSessionPart(sessionId.TargetSubID)
+            }).ToUpperInvariant();
+        }
+
+        private static string NormalizeSessionPart(string? value)
+        {
+            return string.IsNullOrWhiteSpace(value) || string.Equals(value, SessionID.NOT_SET, StringComparison.OrdinalIgnoreCase)
+                ? string.Empty
+                : value.Trim();
         }
 
         // --------------------------------------------------------------

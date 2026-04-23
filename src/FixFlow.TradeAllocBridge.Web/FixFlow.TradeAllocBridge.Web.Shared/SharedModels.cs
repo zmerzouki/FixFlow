@@ -53,6 +53,63 @@ public record MessageLogEntry(
     string Source,
     string ReportFile);
 
+public record DashboardAllocationRecord(
+    DateTimeOffset TimestampUtc,
+    string ClientId,
+    string SourceKey,
+    string Source,
+    bool IsDryRun,
+    string ProcessingStatus,
+    string SideLabel,
+    int TradeCount,
+    decimal GrossAmount);
+
+public record DashboardSummaryResponse(
+    IReadOnlyList<DashboardSourceTotal> SourceTotals,
+    IReadOnlyList<DashboardOutcomeTotal> OutcomeTotals,
+    IReadOnlyList<DashboardSideAmountTotal> SideAmountTotals,
+    IReadOnlyList<DashboardClientCountTotal> ClientCountTotals,
+    IReadOnlyList<DashboardClientAmountTotal> ClientAmountTotals,
+    IReadOnlyList<DashboardTimeSeriesTotal> TimeSeriesTotals);
+
+public record DashboardSourceTotal(
+    string SourceKey,
+    string Source,
+    int AllocationCount);
+
+public record DashboardOutcomeTotal(
+    string SourceKey,
+    string OutcomeKey,
+    string Label,
+    int AllocationCount);
+
+public record DashboardSideAmountTotal(
+    string SourceKey,
+    string OutcomeKey,
+    string SideKey,
+    string Label,
+    decimal GrossAmount);
+
+public record DashboardClientCountTotal(
+    string SourceKey,
+    string OutcomeKey,
+    string ClientId,
+    int AllocationCount);
+
+public record DashboardClientAmountTotal(
+    string SourceKey,
+    string OutcomeKey,
+    string ClientId,
+    decimal GrossAmount);
+
+public record DashboardTimeSeriesTotal(
+    string SourceKey,
+    string OutcomeKey,
+    string BucketKey,
+    string Label,
+    decimal Position,
+    int AllocationCount);
+
 public record FixDictionaryEnumValue(
     string Value,
     string Description);

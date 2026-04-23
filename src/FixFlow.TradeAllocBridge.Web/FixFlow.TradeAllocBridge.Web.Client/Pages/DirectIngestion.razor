@@ -1,4 +1,5 @@
 @page "/direct-ingestion"
+@using System.Diagnostics
 @using System.Globalization
 @using System.IO
 @using Microsoft.AspNetCore.Components
@@ -247,12 +248,12 @@
                     <div class="value">@State.Preview.AllocationsSent</div>
                 </div>
                 <div>
-                    <div class="label">Successful</div>
-                    <div class="value">@State.Preview.SuccessfulAllocations</div>
-                </div>
-                <div>
                     <div class="label">Failed</div>
                     <div class="value">@State.Preview.FailedAllocations</div>
+                </div>
+                <div>
+                    <div class="label">Processing Time (s)</div>
+                    <div class="value">@FormatProcessingTimeSeconds()</div>
                 </div>
             </div>
             @if (!string.IsNullOrWhiteSpace(State.Preview.ResultSuccessMessage))
@@ -359,7 +360,7 @@
 
         if (!string.IsNullOrWhiteSpace(Sample))
         {
-            SetSelectedSample(Sample);
+            await SetSelectedSampleAsync(Sample);
         }
     }
 
@@ -501,6 +502,7 @@
         State.SelectedFileName = file.Name;
         State.SelectedFileSizeKb = (long)Math.Ceiling(file.Size / 1024.0);
         State.IsDragActive = false;
+        await TryAutoSelectClientIdFromFileNameAsync(file.Name);
     }
 
     private void OnDragOver(DragEventArgs _)
@@ -535,12 +537,13 @@
         State.StatusMessage = "Ready";
     }
 
-    private void SetSelectedSample(string sampleName)
+    private async Task SetSelectedSampleAsync(string sampleName)
     {
         ClearSelectedFileOnly();
         State.SelectedSampleName = sampleName.Trim();
         State.SelectedFileName = State.SelectedSampleName;
         State.SelectedFileSizeKb = 0;
+        await TryAutoSelectClientIdFromFileNameAsync(State.SelectedSampleName);
     }
 
     private void ClearSelectedSample()
@@ -572,7 +575,9 @@
         State.IsBusy = true;
         State.StatusMessage = State.Request.DryRun ? "Validating..." : "Processing...";
         State.Preview = null;
+        State.ProcessingTimeMs = null;
         StartProgress();
+        var stopwatch = Stopwatch.StartNew();
 
         try
         {
@@ -624,9 +629,11 @@
         }
         finally
         {
+            stopwatch.Stop();
             State.IsBusy = false;
             StopProgress();
             State.ProgressPercent = State.Preview is not null ? 100 : 0;
+            State.ProcessingTimeMs = stopwatch.ElapsedMilliseconds;
         }
     }
 
@@ -659,6 +666,7 @@
         ClearSelectedFileOnly();
         ClearSelectedSample();
         State.Preview = null;
+        State.ProcessingTimeMs = null;
         State.ProgressPercent = 0;
         State.IsDragActive = false;
         State.Request = new IngestionPreviewRequest { ClientId = string.Empty, DryRun = true };
@@ -693,6 +701,16 @@
             ? "0%"
             : $"{State.Preview.FailedAllocations * 100.0 / State.Preview.AllocationsSubmitted:F1}%";
 
+    private string FormatProcessingTimeSeconds()
+    {
+        if (State.ProcessingTimeMs is null)
+        {
+            return "0.00";
+        }
+
+        return (State.ProcessingTimeMs.Value / 1000d).ToString("N2", CultureInfo.InvariantCulture);
+    }
+
     private IReadOnlyList<string> VisibleWarnings
     {
         get
@@ -718,7 +736,62 @@
         return extension is not null &&
                (extension.Equals(".xlsx", StringComparison.OrdinalIgnoreCase)
                 || extension.Equals(".xls", StringComparison.OrdinalIgnoreCase)
-                || extension.Equals(".csv", StringComparison.OrdinalIgnoreCase));
+               || extension.Equals(".csv", StringComparison.OrdinalIgnoreCase));
+    }
+
+    private async Task TryAutoSelectClientIdFromFileNameAsync(string? fileName)
+    {
+        if (!string.IsNullOrWhiteSpace(State.Request.ClientId) || string.IsNullOrWhiteSpace(fileName))
+        {
+            return;
+        }
+
+        if (!State.HasLoadedMappings)
+        {
+            await LoadMappingsAsync();
+        }
+
+        var mapping = FindMatchingMappingOption(fileName);
+        if (mapping is null || string.Equals(State.Request.ClientId, mapping.ClientId, StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        State.Request.ClientId = mapping.ClientId;
+        await OnClientChanged();
+    }
+
+    private MappingOption? FindMatchingMappingOption(string fileName)
+    {
+        var baseName = Path.GetFileNameWithoutExtension(fileName.Trim());
+        if (string.IsNullOrWhiteSpace(baseName))
+        {
+            return null;
+        }
+
+        var exactMatch = State.MappingOptions.FirstOrDefault(option =>
+            string.Equals(option.ClientId, baseName, StringComparison.OrdinalIgnoreCase));
+        if (exactMatch is not null)
+        {
+            return exactMatch;
+        }
+
+        var normalizedBaseName = NormalizeClientMappingKey(baseName);
+        return State.MappingOptions.FirstOrDefault(option =>
+            string.Equals(NormalizeClientMappingKey(option.ClientId), normalizedBaseName, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static string NormalizeClientMappingKey(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return string.Empty;
+        }
+
+        return new string(value
+            .Where(char.IsLetterOrDigit)
+            .Select(char.ToUpperInvariant)
+            .ToArray());
     }
 
     private static string FormatFixPair(MappingDetails details)

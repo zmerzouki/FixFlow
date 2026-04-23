@@ -22,6 +22,7 @@ public class DirectIngestionState
     public bool IsBusy { get; set; }
     public bool IsDragActive { get; set; }
     public int ProgressPercent { get; set; }
+    public long? ProcessingTimeMs { get; set; }
     public string StatusMessage { get; set; } = "Ready";
 
     public bool ShowMappingFields { get; set; }

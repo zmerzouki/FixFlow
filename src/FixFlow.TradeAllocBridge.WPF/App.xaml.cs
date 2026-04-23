@@ -59,7 +59,7 @@ namespace FixFlow.TradeAllocBridge.WPF
             var appConfig = configuration.Get<AppConfig>() ?? new AppConfig(); // This now works
             if (string.IsNullOrWhiteSpace(appConfig.Fix.SessionQualifier))
             {
-                appConfig.Fix.SessionQualifier = configuration["FixSessionQualifiers:Client"] ?? "FixFlowClient";
+                appConfig.Fix.SessionQualifier = configuration["FixSessionQualifiers:Client"] ?? "FIXFLOWCLIENT";
             }
             LogService.Configure(appConfig.Logging);
 

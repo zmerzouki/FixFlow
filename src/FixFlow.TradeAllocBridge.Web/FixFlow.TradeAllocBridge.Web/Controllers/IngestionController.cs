@@ -16,6 +16,7 @@ namespace FixFlow.TradeAllocBridge.Web.Controllers;
 [Route("api/ingestion")]
 public class IngestionController : ControllerBase
 {
+    private static readonly SemaphoreSlim FixEngineGate = new(1, 1);
     private static readonly Regex InvalidValueRegex = new(
         @"^(?<field>.+?) has an invalid value: (?<value>.+)$",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
@@ -496,6 +497,52 @@ public class IngestionController : ControllerBase
                 .Where(m => !string.IsNullOrWhiteSpace(m))
                 .DefaultIfEmpty("No valid allocations to process.")));
             resultFailureMessage = statusMessage;
+
+            foreach (var trade in missingTrades)
+            {
+                var tags = new List<string>();
+                if (IsMissing(trade, sideColumn)) tags.Add("Side (tag 54)");
+                if (requiresSymbol && IsMissing(trade, symbolColumn)) tags.Add("Symbol (tag 55)");
+                if (IsMissing(trade, accountColumn)) tags.Add("AllocAccount (tag 79)");
+                if (IsMissing(trade, qtyColumn)) tags.Add("AllocShares (tag 80)");
+                if (IsMissing(trade, priceColumn)) tags.Add("AllocAvgPx (tag 153)");
+
+                _validationReport.Add(new ValidationResult(
+                    DateTime.UtcNow.ToString("o"),
+                    mapping.ClientId ?? string.Empty,
+                    $"MISSING_{trade.Id}",
+                    FixValueNormalizer.FormatSideDisplay(GetFieldValue(trade, sideColumn)),
+                    ResolveSymbolValue(trade),
+                    "Failed",
+                    $"Missing required value(s): {string.Join(", ", tags)}.",
+                    string.Empty,
+                    "Direct",
+                    dryRun,
+                    1,
+                    ValidationMetrics.CalculateGrossAmount(trade, qtyColumn, priceColumn)));
+            }
+
+            foreach (var trade in invalidFieldTrades)
+            {
+                var issues = fieldIssuesByTrade.TryGetValue(trade.Id, out var tradeIssues)
+                    ? tradeIssues
+                    : new List<string>();
+                _validationReport.Add(new ValidationResult(
+                    DateTime.UtcNow.ToString("o"),
+                    mapping.ClientId ?? string.Empty,
+                    $"INVALID_{trade.Id}",
+                    FixValueNormalizer.FormatSideDisplay(GetFieldValue(trade, sideColumn)),
+                    ResolveSymbolValue(trade),
+                    "Failed",
+                    SummarizeErrors(issues),
+                    string.Empty,
+                    "Direct",
+                    dryRun,
+                    1,
+                    ValidationMetrics.CalculateGrossAmount(trade, qtyColumn, priceColumn)));
+            }
+
+            _validationReport.Save();
             return new IngestionPreviewResponse(
                 Status: statusMessage,
                 TotalTrades: allocationsSubmitted,
@@ -511,51 +558,58 @@ public class IngestionController : ControllerBase
                 ResultFailureMessage: resultFailureMessage);
         }
 
-        // Setup FIX engine
         var senderComp = mapping.Predefined?.SenderCompID ?? mapping.ClientId ?? "TRADEALLOC";
         var targetComp = mapping.Predefined?.TargetCompID ?? "EXECUTOR";
         var senderSubId = mapping.Predefined?.SenderSubID;
         var targetSubId = mapping.Predefined?.TargetSubID;
+        var acquiredFixEngineGate = false;
+        var startedFixEngine = false;
 
-        _fixEngine.AppendSessionsIfMissing(new[] { (senderComp, targetComp, senderSubId, targetSubId) });
-        _fixEngine.ReloadSettings(_fixApp);
+        await FixEngineGate.WaitAsync();
+        acquiredFixEngineGate = true;
 
-        if (!dryRun)
+        try
         {
-            _fixEngine.Start();
-            await Task.Delay(500); // Give engine time to start
-        }
+            _fixEngine.AppendSessionsIfMissing(new[] { (senderComp, targetComp, senderSubId, targetSubId) });
+            _fixEngine.ReloadSettings(_fixApp);
 
-        // Group and process trades
-        var groupedBySymbolAndSide = validTrades
-            .GroupBy(ResolveGroupKey)
-            .ToList();
+            if (!dryRun)
+            {
+                _fixEngine.Start();
+                startedFixEngine = true;
+                await Task.Delay(500); // Give engine time to start
+            }
 
-        var preparedMessages = new List<(Message Message, string AllocId, string Symbol, string Side, string GroupKey, int TradeCount, IEnumerable<TradeRecord> Trades)>();
-        int failedFixMessages = 0;
-        int successfulFixMessages = 0;
-        int buildFailures = 0;
-        var groupErrors = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
-        var allocIdToGroupKey = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        var groupTotals = trades
-            .GroupBy(ResolveGroupKey)
-            .ToDictionary(g => g.Key, g => g.Count(), StringComparer.OrdinalIgnoreCase);
-        var groupMeta = trades
-            .GroupBy(ResolveGroupKey)
-            .ToDictionary(
-                g => g.Key,
-                g =>
-                {
-                    var first = g.First();
-                    return new
+            // Group and process trades
+            var groupedBySymbolAndSide = validTrades
+                .GroupBy(ResolveGroupKey)
+                .ToList();
+
+            var preparedMessages = new List<(Message Message, string AllocId, string Symbol, string Side, string GroupKey, int TradeCount, IEnumerable<TradeRecord> Trades)>();
+            int failedFixMessages = 0;
+            int successfulFixMessages = 0;
+            int buildFailures = 0;
+            var groupErrors = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+            var allocIdToGroupKey = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            var groupTotals = trades
+                .GroupBy(ResolveGroupKey)
+                .ToDictionary(g => g.Key, g => g.Count(), StringComparer.OrdinalIgnoreCase);
+            var groupMeta = trades
+                .GroupBy(ResolveGroupKey)
+                .ToDictionary(
+                    g => g.Key,
+                    g =>
                     {
-                        Side = GetFieldValue(first, sideColumn),
-                        Symbol = ResolveSymbolValue(first),
-                        Display = ResolveGroupDisplay(first)
-                    };
-                },
-                StringComparer.OrdinalIgnoreCase);
-        var missingTagsByGroup = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
+                        var first = g.First();
+                        return new
+                        {
+                            Side = GetFieldValue(first, sideColumn),
+                            Symbol = ResolveSymbolValue(first),
+                            Display = ResolveGroupDisplay(first)
+                        };
+                    },
+                    StringComparer.OrdinalIgnoreCase);
+            var missingTagsByGroup = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
 
         void AddGroupError(string groupKey, string error)
         {
@@ -605,6 +659,30 @@ public class IngestionController : ControllerBase
         static string FormatAllocId(string allocId, string tradeDate)
         {
             return string.IsNullOrWhiteSpace(tradeDate) ? allocId : $"{allocId}_{tradeDate}";
+        }
+
+        foreach (var trade in missingTrades)
+        {
+            var missingTagsForTrade = new List<string>();
+            if (IsMissing(trade, sideColumn)) missingTagsForTrade.Add("Side (tag 54)");
+            if (requiresSymbol && IsMissing(trade, symbolColumn)) missingTagsForTrade.Add("Symbol (tag 55)");
+            if (IsMissing(trade, accountColumn)) missingTagsForTrade.Add("AllocAccount (tag 79)");
+            if (IsMissing(trade, qtyColumn)) missingTagsForTrade.Add("AllocShares (tag 80)");
+            if (IsMissing(trade, priceColumn)) missingTagsForTrade.Add("AllocAvgPx (tag 153)");
+
+            reportEntries.Add(new ValidationResult(
+                DateTime.UtcNow.ToString("o"),
+                mapping.ClientId ?? string.Empty,
+                FormatAllocId($"MISSING_{trade.Id}", ResolveTradeDate(new[] { trade }, tradeDateColumn)),
+                GetFieldValue(trade, sideColumn),
+                ResolveSymbolValue(trade),
+                "Failed",
+                $"Missing required value(s): {string.Join(", ", missingTagsForTrade)}.",
+                string.Empty,
+                "Direct",
+                dryRun,
+                1,
+                ValidationMetrics.CalculateGrossAmount(trade, qtyColumn, priceColumn)));
         }
 
         foreach (var trade in missingTrades)
@@ -674,8 +752,12 @@ public class IngestionController : ControllerBase
                 side,
                 symbol,
                 "Failed",
+                errorMessage,
                 string.Empty,
-                string.Empty));
+                "Direct",
+                dryRun,
+                1,
+                ValidationMetrics.CalculateGrossAmount(trade, qtyColumn, priceColumn)));
         }
 
         foreach (var symbolGroup in groupedBySymbolAndSide)
@@ -717,7 +799,11 @@ public class IngestionController : ControllerBase
                     symbol,
                     "Failed",
                     string.Empty,
-                    string.Empty
+                    string.Empty,
+                    "Direct",
+                    dryRun,
+                    symbolGroup.Count(),
+                    ValidationMetrics.CalculateGrossAmount(symbolGroup, qtyColumn, priceColumn)
                 ));
                 AddGroupError(groupKey, ex.Message);
                 _logger.LogWarning(ex, "Failed to build FIX allocation for symbol {Symbol}", symbol);
@@ -844,7 +930,11 @@ public class IngestionController : ControllerBase
                 symbol,
                 sendResult == "OK" ? "Sent" : "Failed",
                 string.Empty,
-                mergedMsg.ToString().Replace('\u0001', '|')
+                mergedMsg.ToString().Replace('\u0001', '|'),
+                "Direct",
+                dryRun,
+                tradeCount,
+                ValidationMetrics.CalculateGrossAmount(groupTrades, qtyColumn, priceColumn)
             ));
 
             messages.Add(new FixMessagePreview(
@@ -857,12 +947,7 @@ public class IngestionController : ControllerBase
                 ErrorMessage: sendResult == "OK" ? string.Empty : sendResult));
         }
 
-        if (!dryRun)
-        {
-            _fixEngine.Stop();
-        }
-
-        successfulAllocations = Math.Max(allocationsEligible - failedAllocations, successfulAllocations);
+            successfulAllocations = Math.Max(allocationsEligible - failedAllocations, successfulAllocations);
 
         var generatedFixMessages = preparedMessages.Count;
         resultSuccessMessage = disableAllocationMerge
@@ -901,6 +986,11 @@ public class IngestionController : ControllerBase
 
         string ResolveErrorDetails(ValidationResult entry)
         {
+            if (!string.IsNullOrWhiteSpace(entry.ErrorDetails))
+            {
+                return entry.ErrorDetails;
+            }
+
             if (groupErrors.Count == 0)
             {
                 return string.Empty;
@@ -960,26 +1050,46 @@ public class IngestionController : ControllerBase
             }
         }
 
-        _validationReport.Save();
+            _validationReport.Save();
 
-        if (dryRun && !hasProcessingErrors && !string.IsNullOrWhiteSpace(mapping.ClientId))
-        {
-            TryUpdateMappingValidatedDate(mapping.ClientId);
+            if (dryRun && !hasProcessingErrors && !string.IsNullOrWhiteSpace(mapping.ClientId))
+            {
+                TryUpdateMappingValidatedDate(mapping.ClientId);
+            }
+
+            return new IngestionPreviewResponse(
+                Status: statusMessage,
+                TotalTrades: allocationsSubmitted,
+                ValidTrades: validTrades.Count,
+                Warnings: warnings,
+                Messages: messages,
+                AllocationsSubmitted: allocationsSubmitted,
+                AllocationsProcessed: allocationsProcessed,
+                AllocationsSent: allocationsSent,
+                SuccessfulAllocations: successfulAllocations,
+                FailedAllocations: failedAllocations,
+                ResultSuccessMessage: resultSuccessMessage,
+                ResultFailureMessage: resultFailureMessage);
         }
+        finally
+        {
+            if (startedFixEngine)
+            {
+                try
+                {
+                    _fixEngine.Stop();
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Failed to stop FIX engine after direct ingestion request.");
+                }
+            }
 
-        return new IngestionPreviewResponse(
-            Status: statusMessage,
-            TotalTrades: allocationsSubmitted,
-            ValidTrades: validTrades.Count,
-            Warnings: warnings,
-            Messages: messages,
-            AllocationsSubmitted: allocationsSubmitted,
-            AllocationsProcessed: allocationsProcessed,
-            AllocationsSent: allocationsSent,
-            SuccessfulAllocations: successfulAllocations,
-            FailedAllocations: failedAllocations,
-            ResultSuccessMessage: resultSuccessMessage,
-            ResultFailureMessage: resultFailureMessage);
+            if (acquiredFixEngineGate)
+            {
+                FixEngineGate.Release();
+            }
+        }
     }
 
     private static string BuildSessionMissingMessage(

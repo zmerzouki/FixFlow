@@ -1,0 +1,47 @@
+{
+  "clientId": "MYAKKA",
+  "organizationName": "MYAKKA RIVER INC",
+  "senderDomain": "MYAKKA.COM",
+  "delimiter": ";",
+  "tradeAllocations": {
+    "Sec ID": "48",
+    "Ticker": "55",
+    "Side": "54",
+    "Custodian": "79",
+    "Amount": "80",
+    "Price": "153",
+    "Taxes": "137",
+    "Comm": "137",
+    "Fees": "137"
+  },
+  "defaultTagValues": {
+    "13": "3",
+    "138": "USD",
+    "139": "7"
+  },
+  "fieldDefaultTagValues": {
+    "Comm": {
+      "138": "USD",
+      "139": "3"
+    },
+    "Fees": {
+      "138": "USD",
+      "139": "7"
+    },
+    "Taxes": {
+      "138": "USD",
+      "139": "2"
+    }
+  },
+  "predefined": {
+    "49": "FIXFLOW",
+    "50": "FixFlowWeb",
+    "56": "BROKER",
+    "57": "BROKER_SUB",
+    "115": "MYKA115",
+    "128": "BROKER_ALLOC",
+    "1": null
+  },
+  "dateValidated": "4/22/2026 2:58 PM",
+  "disableAllocationMerge": false
+}

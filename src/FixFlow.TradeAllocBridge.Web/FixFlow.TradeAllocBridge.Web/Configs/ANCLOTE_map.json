@@ -1,0 +1,29 @@
+{
+  "clientId": "ANCLOTE",
+  "organizationName": "ANCLOTE INC",
+  "senderDomain": "ANCLOTE.COM",
+  "delimiter": ";",
+  "tradeAllocations": {
+    "FG Side": "54",
+    "Ticker": "55",
+    "Trade Dt": "75",
+    "Settle Dt": "64",
+    "Account": "79",
+    "Qty": "80",
+    "Price": "153",
+    "Comm": "12"
+  },
+  "defaultTagValues": {},
+  "fieldDefaultTagValues": {},
+  "predefined": {
+    "49": "FIXFLOW",
+    "50": "FIXFLOWWEB",
+    "56": "BROKER",
+    "57": "BROKER_SUB",
+    "115": "ACT115",
+    "128": "BROKER_ALLOC",
+    "1": null
+  },
+  "dateValidated": "4/22/2026 5:05 PM",
+  "disableAllocationMerge": false
+}

@@ -1718,6 +1718,430 @@ main {
     color: #e0f2fe;
 }
 
+.dashboard-page-header {
+    padding-bottom: 0.8rem;
+}
+
+.dashboard-toolbar {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+}
+
+.dashboard-toolbar-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-end;
+    gap: 1rem;
+    flex-wrap: wrap;
+}
+
+.dashboard-toolbar-row-secondary {
+    align-items: center;
+}
+
+.dashboard-toolbar-group {
+    display: flex;
+    flex-direction: column;
+    gap: 0.55rem;
+}
+
+.dashboard-toolbar-label {
+    font-size: 0.78rem;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--muted);
+}
+
+.dashboard-segmented {
+    display: inline-flex;
+    flex-wrap: wrap;
+    gap: 0.45rem;
+}
+
+.dashboard-segment {
+    border: 1px solid var(--border);
+    background: var(--surface-2);
+    color: var(--ink);
+    border-radius: 999px;
+    padding: 0.55rem 0.95rem;
+    font: inherit;
+    font-weight: 600;
+    cursor: pointer;
+    transition: transform 0.18s ease, border-color 0.18s ease, background 0.18s ease;
+}
+
+.dashboard-segment:hover {
+    transform: translateY(-1px);
+    border-color: rgba(15, 76, 92, 0.35);
+}
+
+.dashboard-segment.is-active {
+    background: var(--accent);
+    color: #fff;
+    border-color: var(--accent);
+}
+
+.dashboard-custom-range {
+    flex-direction: row;
+    align-items: flex-end;
+    gap: 0.8rem;
+}
+
+.dashboard-custom-range label {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+}
+
+.dashboard-active-filters {
+    display: flex;
+    gap: 0.55rem;
+    flex-wrap: wrap;
+}
+
+.dashboard-filter-chip {
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: var(--surface-2);
+    color: var(--ink);
+    padding: 0.42rem 0.75rem;
+    font-size: 0.84rem;
+    font-weight: 600;
+}
+
+button.dashboard-filter-chip {
+    cursor: pointer;
+}
+
+.dashboard-filter-chip.is-active {
+    border-color: rgba(15, 76, 92, 0.28);
+    background: rgba(15, 76, 92, 0.08);
+    color: var(--accent-strong);
+}
+
+.dashboard-range-caption {
+    color: var(--muted);
+    font-size: 0.88rem;
+    font-weight: 600;
+}
+
+.dashboard-error {
+    border-radius: 12px;
+    background: rgba(185, 28, 28, 0.08);
+    color: #991b1b;
+    padding: 0.8rem 1rem;
+    font-weight: 600;
+}
+
+.dashboard-grid {
+    display: grid;
+    gap: 1rem;
+    margin-top: 1rem;
+}
+
+.dashboard-grid-two {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.dashboard-grid-three {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.dashboard-card {
+    min-height: 100%;
+}
+
+.dashboard-card-header {
+    display: flex;
+    justify-content: space-between;
+    gap: 1rem;
+    align-items: flex-start;
+    margin-bottom: 1rem;
+}
+
+.dashboard-card-header h2 {
+    margin: 0;
+    font-size: 1.15rem;
+}
+
+.dashboard-card-header p {
+    margin: 0.3rem 0 0;
+    color: var(--muted);
+    max-width: 38rem;
+}
+
+.dashboard-donut-layout {
+    display: grid;
+    grid-template-columns: minmax(210px, 260px) minmax(0, 1fr);
+    gap: 1.2rem;
+    align-items: center;
+}
+
+.dashboard-donut-shell {
+    width: 220px;
+    height: 220px;
+    position: relative;
+    margin: 0 auto;
+}
+
+.dashboard-donut-svg {
+    width: 220px;
+    height: 220px;
+    display: block;
+    overflow: visible;
+}
+
+.dashboard-donut-ring {
+    fill: rgba(148, 163, 184, 0.12);
+}
+
+.dashboard-donut-slice {
+    cursor: pointer;
+    transition: opacity 0.18s ease, filter 0.18s ease;
+    opacity: 0.95;
+    outline: none;
+}
+
+.dashboard-donut-slice.is-static {
+    cursor: default;
+}
+
+.dashboard-donut-slice:hover,
+.dashboard-donut-slice.is-selected {
+    opacity: 1;
+    filter: brightness(1.04);
+}
+
+.dashboard-donut-center {
+    position: absolute;
+    inset: 0;
+    z-index: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    padding: 0 2rem;
+    pointer-events: none;
+}
+
+.dashboard-donut-value {
+    font-size: 1.9rem;
+    font-weight: 700;
+    line-height: 1;
+}
+
+.dashboard-donut-value.is-currency {
+    font-size: 1.55rem;
+}
+
+.dashboard-donut-label {
+    color: var(--muted);
+    font-size: 0.82rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+}
+
+.dashboard-legend {
+    display: flex;
+    flex-direction: column;
+    gap: 0.65rem;
+}
+
+.dashboard-legend-item {
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    gap: 0.7rem;
+    align-items: center;
+    border: 1px solid var(--border);
+    background: var(--surface-2);
+    border-radius: 14px;
+    padding: 0.75rem 0.9rem;
+    color: var(--ink);
+    text-align: left;
+    transition: border-color 0.18s ease, background 0.18s ease;
+}
+
+.dashboard-legend-item.is-selected {
+    border-color: rgba(15, 76, 92, 0.36);
+    background: rgba(15, 76, 92, 0.08);
+}
+
+.dashboard-legend-swatch {
+    width: 0.95rem;
+    height: 0.95rem;
+    border-radius: 999px;
+}
+
+.dashboard-legend-text {
+    font-weight: 600;
+}
+
+.dashboard-legend-metric {
+    color: var(--muted);
+    font-size: 0.88rem;
+    font-weight: 600;
+}
+
+.dashboard-bars {
+    display: flex;
+    flex-direction: column;
+    gap: 0.9rem;
+}
+
+.dashboard-bar-row {
+    display: flex;
+    flex-direction: column;
+    gap: 0.38rem;
+}
+
+.dashboard-bar-meta {
+    display: flex;
+    justify-content: space-between;
+    gap: 1rem;
+    align-items: center;
+}
+
+.dashboard-bar-label {
+    font-weight: 600;
+}
+
+.dashboard-bar-value {
+    color: var(--muted);
+    font-size: 0.88rem;
+    font-weight: 600;
+}
+
+.dashboard-bar-track {
+    width: 100%;
+    height: 0.9rem;
+    border-radius: 999px;
+    background: rgba(148, 163, 184, 0.18);
+    overflow: hidden;
+}
+
+.dashboard-bar-fill {
+    height: 100%;
+    border-radius: 999px;
+    min-width: 0.35rem;
+}
+
+.dashboard-empty {
+    min-height: 180px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.dashboard-line-chart {
+    width: 100%;
+    overflow-x: auto;
+}
+
+.dashboard-line-chart svg {
+    width: 100%;
+    min-height: 280px;
+    display: block;
+}
+
+.dashboard-line-grid {
+    stroke: rgba(148, 163, 184, 0.28);
+    stroke-width: 1;
+    stroke-dasharray: 4 6;
+}
+
+.dashboard-line-axis,
+.dashboard-line-tick {
+    stroke: rgba(100, 116, 139, 0.55);
+    stroke-width: 1;
+}
+
+.dashboard-line-path {
+    fill: none;
+    stroke: #2563eb;
+    stroke-width: 3;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+}
+
+.dashboard-line-point {
+    fill: #2563eb;
+    stroke: #fff;
+    stroke-width: 2;
+}
+
+.dashboard-line-y-label,
+.dashboard-line-x-label {
+    fill: var(--muted);
+    font-size: 0.8rem;
+    font-weight: 600;
+}
+
+.theme-dark .dashboard-segment.is-active {
+    color: #062a26;
+}
+
+.theme-dark .dashboard-filter-chip.is-active,
+.theme-dark .dashboard-legend-item.is-selected {
+    background: rgba(45, 212, 191, 0.12);
+    border-color: rgba(45, 212, 191, 0.35);
+    color: #d1fae5;
+}
+
+.theme-dark .dashboard-error {
+    background: rgba(248, 113, 113, 0.14);
+    color: #fecaca;
+}
+
+.theme-dark .dashboard-line-grid {
+    stroke: rgba(148, 163, 184, 0.22);
+}
+
+.theme-dark .dashboard-donut-ring {
+    fill: rgba(148, 163, 184, 0.16);
+}
+
+.theme-dark .dashboard-line-axis,
+.theme-dark .dashboard-line-tick {
+    stroke: rgba(203, 213, 225, 0.45);
+}
+
+.theme-dark .dashboard-line-path,
+.theme-dark .dashboard-line-point {
+    stroke: #60a5fa;
+}
+
+.theme-dark .dashboard-line-point {
+    fill: #60a5fa;
+    stroke: #0f172a;
+}
+
+@media (max-width: 1100px) {
+    .dashboard-grid-two,
+    .dashboard-grid-three {
+        grid-template-columns: 1fr;
+    }
+}
+
+@media (max-width: 760px) {
+    .dashboard-donut-layout {
+        grid-template-columns: 1fr;
+    }
+
+    .dashboard-donut-shell,
+    .dashboard-donut-svg {
+        width: 190px;
+        height: 190px;
+    }
+
+    .dashboard-custom-range {
+        flex-direction: column;
+        align-items: stretch;
+    }
+}
+
 .dep-warn {
     display: inline-flex;
     align-items: center;

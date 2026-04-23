@@ -1,55 +1,977 @@
 @page "/"
+@using System.Globalization
+@inject HttpClient Http
 
-<PageTitle>FixFlow</PageTitle>
+<PageTitle>Dashboard</PageTitle>
 
-<section class="hero">
+<section class="page-header dashboard-page-header">
     <div>
-        <h1>Automation for Spreadsheet-driven Trade Allocations</h1>
-        <p>Configure your Spreadsheet-to-Fix parser for each counter-party to automate the extraction, normalization, transformation, validation and loading of Allocation Instructions (J) spreadsheets into compliant FIX messages. Build, validate, and deploy new mappings in minutes instead of days of custom parser work.</p>
- <!--       <div class="button-row">
-            <a class="btn primary" href="direct-ingestion">Start Direct Ingestion</a>
-            <a class="btn" href="map-management">Manage Mappings</a>
-            <a class="btn" href="message-log">View Message Log</a>
-        </div> -->
-    </div>
-    <div class="hero-panel">
-        <div class="panel-title">Workflow Snapshot</div>
-        <ol class="steps">
-            <li>Create a mapping (your parser-by-configuration) for each client's trade allocation spreadsheet (CSV, XLS or XLSX)</li>
-            <li>Validate your mapping by simulating your extraction, transformation and load against sample data.</li>
-            <li>Use your mapping to upload allocations, preview and validate FIX output, and submit for processing.</li>
-            <li>Deploy your mapping to automate allocation spreadsheet extraction from email.</li>
-            <li>Monitor message logs, audit results, and export to CSV.</li>
-        </ol>
+        <h1>Operations Dashboard</h1>
+        <p>Track allocation volume, outcomes, client activity, and processed dollars across Direct Ingestion and Email Automation.</p>
     </div>
 </section>
 
-<section class="grid three home-grid">
-    <div class="card">
-        <h2><a href="map-management">Map Management</a></h2>
-        <p>Create, edit, validate, and automate FIX mapping configurations at runtime (not development time), so you can iterate custom parsers quickly, without code changes.</p>
+<section class="card dashboard-toolbar">
+    <div class="dashboard-toolbar-row">
+        <div class="dashboard-toolbar-group">
+            <span class="dashboard-toolbar-label">Date Range</span>
+            <div class="dashboard-segmented">
+                @foreach (var option in RangeOptions)
+                {
+                    <button type="button"
+                            class="dashboard-segment @(_selectedRangeKey == option.Key ? "is-active" : string.Empty)"
+                            @onclick="() => SelectRangeAsync(option.Key)">
+                        @option.Label
+                    </button>
+                }
+            </div>
+        </div>
+
+        @if (_selectedRangeKey == CustomRangeKey)
+        {
+            <div class="dashboard-toolbar-group dashboard-custom-range">
+                <label>
+                    <span class="dashboard-toolbar-label">Start</span>
+                    <input class="text-input" type="date" @bind="_customStart" />
+                </label>
+                <label>
+                    <span class="dashboard-toolbar-label">End</span>
+                    <input class="text-input" type="date" @bind="_customEnd" />
+                </label>
+                <button type="button" class="btn primary" @onclick="ApplyCustomRangeAsync">Apply</button>
+            </div>
+        }
     </div>
-    <div class="card">
-        <h2><a href="direct-ingestion">Direct Ingestion</a></h2>
-        <p>Upload allocation spreadsheets, validate required FIX tags, preview raw FIX output, and submit messages to FIX acceptor(s), speeding testing and reducing turnaround time.</p>
+
+    <div class="dashboard-toolbar-row dashboard-toolbar-row-secondary">
+        <div class="dashboard-active-filters">
+            <span class="dashboard-filter-chip is-active">
+                Source: @SelectedSourceLabel
+            </span>
+            <button type="button" class="dashboard-filter-chip" @onclick="ClearSourceFilter">All Sources</button>
+
+            <span class="dashboard-filter-chip @(_selectedOutcomeKey is null ? string.Empty : "is-active")">
+                Status: @SelectedOutcomeLabel
+            </span>
+            <button type="button" class="dashboard-filter-chip" @onclick="ClearOutcomeFilter" disabled="@(_selectedOutcomeKey is null)">All Statuses</button>
+        </div>
+        <div class="dashboard-range-caption">
+            @CurrentRangeCaption
+        </div>
     </div>
-    <div class="card">
-        <h2><a href="message-log">Full Traceability</a></h2>
-        <p>Filter and review processed FIX messages, inspect statuses/errors, and export results at runtime, improving auditability and troubleshooting speed.</p>
-    </div>
+
+    @if (!string.IsNullOrWhiteSpace(_loadError))
+    {
+        <div class="dashboard-error">@_loadError</div>
+    }
 </section>
 
-<section class="grid three home-grid">
-        <div class="card">
-        <h2><a href="settings">Email Automation</a></h2>
-        <p>Configure mailbox polling and automatically ingest allocation attachments into FIX processing at runtime, reducing manual handling and improving SLA speed.</p>
-    </div>
-    <div class="card">
-        <h2><a href="fix-dictionary">FIX Dictionary</a></h2>
-        <p>Search tags, required fields, and valid enumerations. Message results preserve FIX dictionary order with optional sorting.</p>
-    </div>
-    <div class="card">
-        <h2><a href="settings#fix-transport-parameters">Runtime Configuration</a></h2>
-        <p>Edit and apply FIX transport parameters at runtime so environment fixes and routing tweaks take effect immediately without restarts, speeding iteration and reducing operational friction.</p>
-    </div>
-</section>
+@if (_isLoading)
+{
+    <section class="card">
+        <div class="empty-state">Loading dashboard...</div>
+    </section>
+}
+else
+{
+    <section class="dashboard-grid dashboard-grid-three">
+        <article class="card dashboard-card">
+            <div class="dashboard-card-header">
+                <div>
+                    <h2>Submitted by Source</h2>
+                    <p>Original spreadsheet allocations by ingestion source.</p>
+                </div>
+            </div>
+            @RenderDonutChart(SourceSegments, "Allocations", ToggleSourceFilter, _selectedSourceKey)
+        </article>
+
+        <article class="card dashboard-card">
+            <div class="dashboard-card-header">
+                <div>
+                    <h2>Passed vs Failed</h2>
+                    <p>Dry-runs are excluded from this chart.</p>
+                </div>
+            </div>
+            @RenderDonutChart(StatusSegments, "Allocations", ToggleOutcomeFilter, _selectedOutcomeKey)
+        </article>
+
+        <article class="card dashboard-card">
+            <div class="dashboard-card-header">
+                <div>
+                    <h2>Dollars by Side</h2>
+                    <p>Allocation dollar amount grouped by FIX side (tag 54).</p>
+                </div>
+            </div>
+            @RenderDonutChart(SideAmountSegments, "Gross Amount", formatCurrency: true)
+        </article>
+    </section>
+
+    <section class="dashboard-grid dashboard-grid-two">
+        <article class="card dashboard-card">
+            <div class="dashboard-card-header">
+                <div>
+                    <h2>Allocations by Client ID</h2>
+                    <p>Counts are based on original spreadsheet allocations.</p>
+                </div>
+            </div>
+            @RenderBarChart(CountByClientBars, false)
+        </article>
+
+        <article class="card dashboard-card">
+            <div class="dashboard-card-header">
+                <div>
+                    <h2>Dollars by Client ID</h2>
+                    <p>Derived from spreadsheet rows as quantity x price.</p>
+                </div>
+            </div>
+            @RenderBarChart(AmountByClientBars, true)
+        </article>
+    </section>
+
+    <section class="dashboard-grid">
+        <article class="card dashboard-card">
+            <div class="dashboard-card-header">
+                <div>
+                    <h2>@TimeSeriesTitle</h2>
+                    <p>@TimeSeriesDescription</p>
+                </div>
+            </div>
+            <div class="dashboard-line-chart">
+                <svg viewBox="0 0 760 280" role="img" aria-label="@TimeSeriesTitle">
+                    @foreach (var tick in TimeSeriesLineChart.YTicks)
+                    {
+                        <line class="dashboard-line-grid"
+                                x1="64"
+                                y1="@GetLineY(tick.Position, TimeSeriesLineChart)"
+                                x2="724"
+                                y2="@GetLineY(tick.Position, TimeSeriesLineChart)" />
+                        <svg:text class="dashboard-line-y-label"
+                                    x="54"
+                                    y="@(GetLineY(tick.Position, TimeSeriesLineChart) + 4)"
+                                    text-anchor="end">
+                            @tick.Label
+                        </svg:text>
+                    }
+
+                    <line class="dashboard-line-axis" x1="64" y1="220" x2="724" y2="220" />
+                    <line class="dashboard-line-axis" x1="64" y1="20" x2="64" y2="220" />
+
+                    @foreach (var tick in TimeSeriesLineChart.XTicks)
+                    {
+                        <line class="dashboard-line-tick"
+                                x1="@GetLineX(tick.Position, TimeSeriesLineChart)"
+                                y1="220"
+                                x2="@GetLineX(tick.Position, TimeSeriesLineChart)"
+                                y2="228" />
+                        <svg:text class="dashboard-line-x-label"
+                                    x="@GetLineX(tick.Position, TimeSeriesLineChart)"
+                                    y="248"
+                                    text-anchor="middle">
+                            @tick.Label
+                        </svg:text>
+                    }
+
+                    <path class="dashboard-line-path"
+                            d="@BuildLinePath(TimeSeriesLineChart.Points, TimeSeriesLineChart)" />
+
+                    @foreach (var point in TimeSeriesLineChart.Points)
+                    {
+                        <circle class="dashboard-line-point"
+                                cx="@GetLineX(point.Position, TimeSeriesLineChart)"
+                                cy="@GetLineY(point.Value, TimeSeriesLineChart)"
+                                r="4">
+                            <title>@($"{point.Label}: {point.Value:N0} allocations")</title>
+                        </circle>
+                    }
+                </svg>
+            </div>
+        </article>
+    </section>
+}
+
+@code {
+    private const string TodayRangeKey = "today";
+    private const string Last7RangeKey = "last7";
+    private const string Last30RangeKey = "last30";
+    private const string CustomRangeKey = "custom";
+    private const string DirectKey = "Direct";
+    private const string EmailKey = "Email";
+    private const string PassedKey = "Passed";
+    private const string FailedKey = "Failed";
+
+    private static readonly IReadOnlyList<RangeOption> RangeOptions = new[]
+    {
+        new RangeOption(TodayRangeKey, "Today"),
+        new RangeOption(Last7RangeKey, "Last 7 Days"),
+        new RangeOption(Last30RangeKey, "Last 30 Days"),
+        new RangeOption(CustomRangeKey, "Custom Date Range")
+    };
+
+    private readonly Dictionary<string, string> _sourceLabels = new(StringComparer.OrdinalIgnoreCase)
+    {
+        [DirectKey] = "Direct Ingestion",
+        [EmailKey] = "Email Automation"
+    };
+
+    private bool _isLoading = true;
+    private string? _loadError;
+    private string _selectedRangeKey = Last7RangeKey;
+    private string _selectedSourceKey = DirectKey;
+    private string? _selectedOutcomeKey;
+    private DateOnly? _customStart = DateOnly.FromDateTime(DateTime.Today);
+    private DateOnly? _customEnd = DateOnly.FromDateTime(DateTime.Today);
+    private DateTimeOffset _rangeStartLocal;
+    private DateTimeOffset _rangeEndLocal;
+    private DashboardSummaryResponse _summary = new(
+        Array.Empty<DashboardSourceTotal>(),
+        Array.Empty<DashboardOutcomeTotal>(),
+        Array.Empty<DashboardSideAmountTotal>(),
+        Array.Empty<DashboardClientCountTotal>(),
+        Array.Empty<DashboardClientAmountTotal>(),
+        Array.Empty<DashboardTimeSeriesTotal>());
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadDashboardAsync();
+    }
+
+    private string SelectedSourceLabel =>
+        string.IsNullOrWhiteSpace(_selectedSourceKey)
+            ? "All"
+            : _sourceLabels.TryGetValue(_selectedSourceKey, out var label) ? label : _selectedSourceKey;
+
+    private string SelectedOutcomeLabel => _selectedOutcomeKey ?? "All";
+
+    private string CurrentRangeCaption =>
+        $"{_rangeStartLocal:MMM d, yyyy} - {_rangeEndLocal.AddSeconds(-1):MMM d, yyyy}";
+
+    private string TimeSeriesTitle =>
+        GetTimeBucketMode() switch
+        {
+            TimeBucketMode.Hour => "Allocations Processed per Hour",
+            TimeBucketMode.Weekday => "Allocations Processed per Weekday",
+            TimeBucketMode.DateRange => "Allocations Processed for Selected Date Range",
+            _ => "Allocations Processed per Day of Month"
+        };
+
+    private string TimeSeriesDescription =>
+        GetTimeBucketMode() switch
+        {
+            TimeBucketMode.Hour => "Shown in your local time as a line chart.",
+            TimeBucketMode.Weekday => "Aggregated by weekday in your local time.",
+            TimeBucketMode.DateRange => "Aggregated by day across your selected date range in local time.",
+            _ => "Aggregated by calendar day-of-month in your local time as a line chart."
+        };
+
+    private IReadOnlyList<ChartSegment> SourceSegments =>
+        BuildSegments(_summary.SourceTotals
+            .Select(item => new ChartSegment(
+                item.SourceKey,
+                _sourceLabels.TryGetValue(item.SourceKey, out var label) ? label : item.Source,
+                item.AllocationCount,
+                item.SourceKey.Equals(EmailKey, StringComparison.OrdinalIgnoreCase) ? "#d9783a" : "#0f4c5c"))
+            .ToList());
+
+    private IReadOnlyList<ChartSegment> StatusSegments =>
+        BuildSegments(_summary.OutcomeTotals
+            .Where(item => MatchesSource(item.SourceKey))
+            .GroupBy(item => item.OutcomeKey, StringComparer.OrdinalIgnoreCase)
+            .Select(group => new ChartSegment(
+                group.Key,
+                group.Key,
+                group.Sum(item => (decimal)item.AllocationCount),
+                group.Key.Equals(PassedKey, StringComparison.OrdinalIgnoreCase) ? "#0f766e" : "#b45309"))
+            .ToList());
+
+    private IReadOnlyList<ChartSegment> SideAmountSegments =>
+        BuildSegments(_summary.SideAmountTotals
+            .Where(item => MatchesSource(item.SourceKey) && MatchesOutcome(item.OutcomeKey))
+            .GroupBy(item => item.SideKey, StringComparer.OrdinalIgnoreCase)
+            .Select(group => new ChartSegment(
+                group.Key,
+                group.First().Label,
+                group.Sum(item => item.GrossAmount),
+                GetSideColor(group.Key)))
+            .OrderByDescending(item => item.Value)
+            .ToList());
+
+    private IReadOnlyList<BarDatum> CountByClientBars =>
+        BuildBars(_summary.ClientCountTotals
+            .Where(item => MatchesSource(item.SourceKey) && MatchesOutcome(item.OutcomeKey))
+            .GroupBy(item => item.ClientId, StringComparer.OrdinalIgnoreCase)
+            .Select(group => new BarDatum(group.Key, group.Key, group.Sum(item => (decimal)item.AllocationCount), "#0f4c5c"))
+            .OrderByDescending(item => item.Value)
+            .ToList());
+
+    private IReadOnlyList<BarDatum> AmountByClientBars =>
+        BuildBars(_summary.ClientAmountTotals
+            .Where(item => MatchesSource(item.SourceKey) && MatchesOutcome(item.OutcomeKey))
+            .GroupBy(item => item.ClientId, StringComparer.OrdinalIgnoreCase)
+            .Select(group => new BarDatum(group.Key, group.Key, group.Sum(item => item.GrossAmount), "#0f4c5c"))
+            .OrderByDescending(item => item.Value)
+            .ToList());
+
+    private LineChartModel TimeSeriesLineChart => BuildTimeSeriesLineChart();
+
+    private async Task SelectRangeAsync(string key)
+    {
+        _selectedRangeKey = key;
+        if (!string.Equals(key, CustomRangeKey, StringComparison.OrdinalIgnoreCase))
+        {
+            await LoadDashboardAsync();
+        }
+    }
+
+    private async Task ApplyCustomRangeAsync()
+    {
+        _selectedRangeKey = CustomRangeKey;
+        await LoadDashboardAsync();
+    }
+
+    private async Task LoadDashboardAsync()
+    {
+        if (!TryResolveSelectedRange(out var startLocal, out var endLocal, out var error))
+        {
+            _loadError = error;
+            _summary = new DashboardSummaryResponse(
+                Array.Empty<DashboardSourceTotal>(),
+                Array.Empty<DashboardOutcomeTotal>(),
+                Array.Empty<DashboardSideAmountTotal>(),
+                Array.Empty<DashboardClientCountTotal>(),
+                Array.Empty<DashboardClientAmountTotal>(),
+                Array.Empty<DashboardTimeSeriesTotal>());
+            return;
+        }
+
+        _isLoading = true;
+        _loadError = null;
+        _rangeStartLocal = startLocal;
+        _rangeEndLocal = endLocal;
+
+        try
+        {
+            var localOffsetMinutes = (int)DateTimeOffset.Now.Offset.TotalMinutes;
+            var url = $"api/dashboard/summary?fromUtc={Uri.EscapeDataString(startLocal.ToUniversalTime().ToString("o", CultureInfo.InvariantCulture))}&toUtc={Uri.EscapeDataString(endLocal.ToUniversalTime().ToString("o", CultureInfo.InvariantCulture))}&localOffsetMinutes={localOffsetMinutes.ToString(CultureInfo.InvariantCulture)}&rangeMode={Uri.EscapeDataString(_selectedRangeKey)}";
+            _summary = await Http.GetFromJsonAsync<DashboardSummaryResponse>(url) ?? new DashboardSummaryResponse(
+                Array.Empty<DashboardSourceTotal>(),
+                Array.Empty<DashboardOutcomeTotal>(),
+                Array.Empty<DashboardSideAmountTotal>(),
+                Array.Empty<DashboardClientCountTotal>(),
+                Array.Empty<DashboardClientAmountTotal>(),
+                Array.Empty<DashboardTimeSeriesTotal>());
+        }
+        catch (Exception ex)
+        {
+            _summary = new DashboardSummaryResponse(
+                Array.Empty<DashboardSourceTotal>(),
+                Array.Empty<DashboardOutcomeTotal>(),
+                Array.Empty<DashboardSideAmountTotal>(),
+                Array.Empty<DashboardClientCountTotal>(),
+                Array.Empty<DashboardClientAmountTotal>(),
+                Array.Empty<DashboardTimeSeriesTotal>());
+            _loadError = $"Unable to load dashboard data: {ex.Message}";
+        }
+        finally
+        {
+            _isLoading = false;
+        }
+    }
+
+    private bool TryResolveSelectedRange(out DateTimeOffset startLocal, out DateTimeOffset endLocal, out string? error)
+    {
+        error = null;
+        var now = DateTimeOffset.Now;
+        var todayStart = new DateTimeOffset(now.Year, now.Month, now.Day, 0, 0, 0, now.Offset);
+
+        switch (_selectedRangeKey)
+        {
+            case TodayRangeKey:
+                startLocal = todayStart;
+                endLocal = todayStart.AddDays(1);
+                return true;
+            case Last7RangeKey:
+                startLocal = todayStart.AddDays(-6);
+                endLocal = todayStart.AddDays(1);
+                return true;
+            case Last30RangeKey:
+                startLocal = todayStart.AddDays(-29);
+                endLocal = todayStart.AddDays(1);
+                return true;
+            case CustomRangeKey:
+                if (_customStart is not DateOnly customStart)
+                {
+                    startLocal = default;
+                    endLocal = default;
+                    error = "Please enter a valid custom start date.";
+                    return false;
+                }
+
+                if (_customEnd is not DateOnly customEnd)
+                {
+                    startLocal = default;
+                    endLocal = default;
+                    error = "Please enter a valid custom end date.";
+                    return false;
+                }
+
+                if (customEnd < customStart)
+                {
+                    startLocal = default;
+                    endLocal = default;
+                    error = "Custom end date must be on or after the start date.";
+                    return false;
+                }
+
+                startLocal = new DateTimeOffset(customStart.Year, customStart.Month, customStart.Day, 0, 0, 0, now.Offset);
+                endLocal = new DateTimeOffset(customEnd.Year, customEnd.Month, customEnd.Day, 0, 0, 0, now.Offset).AddDays(1);
+                return true;
+            default:
+                startLocal = todayStart;
+                endLocal = todayStart.AddDays(1);
+                return true;
+        }
+    }
+
+    private void ToggleSourceFilter(string key)
+    {
+        _selectedSourceKey = string.Equals(_selectedSourceKey, key, StringComparison.OrdinalIgnoreCase) ? string.Empty : key;
+        _selectedOutcomeKey = null;
+    }
+
+    private void ToggleOutcomeFilter(string key)
+    {
+        _selectedOutcomeKey = string.Equals(_selectedOutcomeKey, key, StringComparison.OrdinalIgnoreCase) ? null : key;
+    }
+
+    private void ClearSourceFilter()
+    {
+        _selectedSourceKey = string.Empty;
+        _selectedOutcomeKey = null;
+    }
+
+    private void ClearOutcomeFilter()
+    {
+        _selectedOutcomeKey = null;
+    }
+
+    private TimeBucketMode GetTimeBucketMode()
+    {
+        if (string.Equals(_selectedRangeKey, TodayRangeKey, StringComparison.OrdinalIgnoreCase))
+        {
+            return TimeBucketMode.Hour;
+        }
+
+        if (string.Equals(_selectedRangeKey, CustomRangeKey, StringComparison.OrdinalIgnoreCase))
+        {
+            return TimeBucketMode.DateRange;
+        }
+
+        return (_rangeEndLocal - _rangeStartLocal).TotalDays <= 7
+            ? TimeBucketMode.Weekday
+            : TimeBucketMode.DayOfMonth;
+    }
+
+    private LineChartModel BuildTimeSeriesLineChart()
+    {
+        var mode = GetTimeBucketMode();
+        var points = mode switch
+        {
+            TimeBucketMode.Hour => Enumerable.Range(0, 24)
+                .Select(hour => new LinePoint(
+                    hour,
+                    DateTime.Today.AddHours(hour).ToString("htt", CultureInfo.InvariantCulture).Replace("AM", " AM").Replace("PM", " PM"),
+                    GetTimeSeriesValue(hour.ToString(CultureInfo.InvariantCulture))))
+                .ToList(),
+            TimeBucketMode.Weekday => Enum.GetValues<DayOfWeek>()
+                .OrderBy(day => day == DayOfWeek.Sunday ? 7 : (int)day)
+                .Select(day => new LinePoint(
+                    day == DayOfWeek.Sunday ? 7 : (int)day,
+                    day.ToString(),
+                    GetTimeSeriesValue(day.ToString())))
+                .ToList(),
+            TimeBucketMode.DateRange => BuildDateRangeLinePoints(),
+            _ => Enumerable.Range(1, 31)
+                .Select(day => new LinePoint(
+                    day,
+                    day.ToString(CultureInfo.InvariantCulture),
+                    GetTimeSeriesValue(day.ToString(CultureInfo.InvariantCulture))))
+                .ToList()
+        };
+
+        var rawMaxValue = points.Max(point => point.Value);
+        var maxValue = rawMaxValue <= 4 ? 4 : Math.Ceiling(rawMaxValue / 5m) * 5m;
+
+        var yTicks = new List<AxisTick>
+        {
+            new(0m, "0"),
+            new(Math.Ceiling(maxValue / 2m), Math.Ceiling(maxValue / 2m).ToString("N0", CultureInfo.InvariantCulture)),
+            new(maxValue, maxValue.ToString("N0", CultureInfo.InvariantCulture))
+        };
+
+        var xTicks = mode switch
+        {
+            TimeBucketMode.Hour => new List<AxisTick>
+            {
+                new(0m, "0"),
+                new(6m, "6 AM"),
+                new(12m, "12 PM"),
+                new(18m, "6 PM"),
+                new(24m, "12 AM")
+            },
+            TimeBucketMode.Weekday => points
+                .Select(point => new AxisTick(point.Position, ShortenWeekdayLabel(point.Label)))
+                .ToList(),
+            TimeBucketMode.DateRange => BuildDateRangeTicks(points),
+            _ => BuildDayOfMonthTicks()
+        };
+
+        var maxX = mode switch
+        {
+            TimeBucketMode.Hour => 24m,
+            TimeBucketMode.Weekday => 7m,
+            TimeBucketMode.DateRange => points.Count <= 1 ? 1m : points.Max(point => point.Position),
+            _ => 31m
+        };
+
+        return new LineChartModel(points, xTicks, yTicks, maxX, maxValue);
+    }
+
+    private List<LinePoint> BuildDateRangeLinePoints()
+    {
+        var endDate = _rangeEndLocal.AddSeconds(-1).Date;
+        var startDate = _rangeStartLocal.Date;
+        var totalDays = Math.Max((endDate - startDate).Days, 0);
+
+        return Enumerable.Range(0, totalDays + 1)
+            .Select(offset =>
+            {
+                var date = startDate.AddDays(offset);
+                var key = date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+                return new LinePoint(
+                    offset,
+                    date.ToString("MMM d", CultureInfo.InvariantCulture),
+                    GetTimeSeriesValue(key));
+            })
+            .ToList();
+    }
+
+    private static List<AxisTick> BuildDayOfMonthTicks()
+    {
+        return new List<AxisTick>
+        {
+            new(1m, "1"),
+            new(8m, "8"),
+            new(15m, "15"),
+            new(22m, "22"),
+            new(31m, "31")
+        };
+    }
+
+    private static List<AxisTick> BuildDateRangeTicks(IReadOnlyList<LinePoint> points)
+    {
+        if (points.Count == 0)
+        {
+            return new List<AxisTick> { new(0m, string.Empty) };
+        }
+
+        if (points.Count <= 7)
+        {
+            return points
+                .Select(point => new AxisTick(point.Position, point.Label))
+                .ToList();
+        }
+
+        var tickIndexes = new HashSet<int>
+        {
+            0,
+            points.Count - 1,
+            (points.Count - 1) / 3,
+            ((points.Count - 1) * 2) / 3
+        };
+
+        return tickIndexes
+            .OrderBy(index => index)
+            .Select(index => new AxisTick(points[index].Position, points[index].Label))
+            .ToList();
+    }
+
+    private static string ShortenWeekdayLabel(string label)
+    {
+        return label.Length <= 3 ? label : label[..3];
+    }
+
+    private static IReadOnlyList<ChartSegment> BuildSegments(IReadOnlyList<ChartSegment> segments) =>
+        segments
+            .Where(segment => segment.Value > 0)
+            .ToList();
+
+    private static IReadOnlyList<BarDatum> BuildBars(IReadOnlyList<BarDatum> bars) =>
+        bars
+            .Where(bar => bar.Value > 0)
+            .ToList();
+
+    private decimal GetTimeSeriesValue(string bucketKey)
+    {
+        return _summary.TimeSeriesTotals
+            .Where(item => MatchesSource(item.SourceKey) && MatchesOutcome(item.OutcomeKey) && string.Equals(item.BucketKey, bucketKey, StringComparison.OrdinalIgnoreCase))
+            .Sum(item => (decimal)item.AllocationCount);
+    }
+
+    private bool MatchesSource(string sourceKey)
+    {
+        return string.IsNullOrWhiteSpace(_selectedSourceKey)
+            || string.Equals(sourceKey, _selectedSourceKey, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private bool MatchesOutcome(string outcomeKey)
+    {
+        return _selectedOutcomeKey is null
+            || string.Equals(outcomeKey, _selectedOutcomeKey, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private RenderFragment RenderBarChart(IReadOnlyList<BarDatum> bars, bool formatCurrency) => builder =>
+    {
+        if (bars.Count == 0)
+        {
+            builder.OpenElement(0, "div");
+            builder.AddAttribute(1, "class", "empty-state dashboard-empty");
+            builder.AddContent(2, "No data available for the current filter.");
+            builder.CloseElement();
+            return;
+        }
+
+        var maxValue = bars.Max(bar => bar.Value);
+
+        builder.OpenElement(10, "div");
+        builder.AddAttribute(11, "class", "dashboard-bars");
+
+        var index = 0;
+        foreach (var bar in bars)
+        {
+            var width = maxValue <= 0 ? 0m : bar.Value / maxValue * 100m;
+            var displayValue = formatCurrency
+                ? bar.Value.ToString("C0", CultureInfo.GetCultureInfo("en-US"))
+                : bar.Value.ToString("N0", CultureInfo.InvariantCulture);
+
+            builder.OpenElement(12 + index, "div");
+            builder.AddAttribute(13 + index, "class", "dashboard-bar-row");
+            builder.AddAttribute(14 + index, "title", $"{bar.Label}: {displayValue}");
+
+            builder.OpenElement(15 + index, "div");
+            builder.AddAttribute(16 + index, "class", "dashboard-bar-meta");
+            builder.OpenElement(17 + index, "span");
+            builder.AddAttribute(18 + index, "class", "dashboard-bar-label");
+            builder.AddContent(19 + index, bar.Label);
+            builder.CloseElement();
+            builder.OpenElement(20 + index, "span");
+            builder.AddAttribute(21 + index, "class", "dashboard-bar-value");
+            builder.AddContent(22 + index, displayValue);
+            builder.CloseElement();
+            builder.CloseElement();
+
+            builder.OpenElement(23 + index, "div");
+            builder.AddAttribute(24 + index, "class", "dashboard-bar-track");
+            builder.OpenElement(25 + index, "div");
+            builder.AddAttribute(26 + index, "class", "dashboard-bar-fill");
+            builder.AddAttribute(27 + index, "style", $"width:{width.ToString("0.##", CultureInfo.InvariantCulture)}%; background:{bar.Color};");
+            builder.CloseElement();
+            builder.CloseElement();
+
+            builder.CloseElement();
+            index += 20;
+        }
+
+        builder.CloseElement();
+    };
+
+    private RenderFragment RenderDonutChart(
+        IReadOnlyList<ChartSegment> segments,
+        string centerLabel,
+        Action<string>? onSelect = null,
+        string? selectedKey = null,
+        bool formatCurrency = false) => builder =>
+    {
+        if (segments.Count == 0)
+        {
+            builder.OpenElement(0, "div");
+            builder.AddAttribute(1, "class", "empty-state dashboard-empty");
+            builder.AddContent(2, "No data available for the current filter.");
+            builder.CloseElement();
+            return;
+        }
+
+        var total = segments.Sum(segment => segment.Value);
+        var slices = BuildDonutSlices(segments);
+
+        builder.OpenElement(10, "div");
+        builder.AddAttribute(11, "class", "dashboard-donut-layout");
+
+        builder.OpenElement(20, "div");
+        builder.AddAttribute(21, "class", "dashboard-donut-shell");
+
+        builder.OpenElement(22, "svg");
+        builder.AddAttribute(23, "class", "dashboard-donut-svg");
+        builder.AddAttribute(24, "viewBox", "0 0 220 220");
+        builder.AddAttribute(25, "role", "img");
+        builder.AddAttribute(26, "aria-label", centerLabel);
+
+        builder.OpenElement(27, "circle");
+        builder.AddAttribute(28, "class", "dashboard-donut-ring");
+        builder.AddAttribute(29, "cx", "110");
+        builder.AddAttribute(30, "cy", "110");
+        builder.AddAttribute(31, "r", "84");
+        builder.CloseElement();
+
+        foreach (var slice in slices)
+        {
+            var isSelected = string.Equals(selectedKey, slice.Key, StringComparison.OrdinalIgnoreCase);
+            builder.OpenElement(32, "path");
+            builder.AddAttribute(33, "class", $"dashboard-donut-slice {(onSelect is null ? "is-static" : string.Empty)} {(isSelected ? "is-selected" : string.Empty)}");
+            builder.AddAttribute(34, "d", slice.PathData);
+            builder.AddAttribute(35, "fill", slice.Color);
+            builder.AddAttribute(36, "role", onSelect is null ? "img" : "button");
+            builder.AddAttribute(37, "aria-label", BuildDonutMetricText(slice.Label, slice.Value, slice.Percent, formatCurrency));
+            if (onSelect is not null)
+            {
+                builder.AddAttribute(38, "onclick", EventCallback.Factory.Create(this, () => onSelect(slice.Key)));
+            }
+            builder.OpenElement(39, "title");
+            builder.AddContent(40, BuildDonutMetricText(slice.Label, slice.Value, slice.Percent, formatCurrency));
+            builder.CloseElement();
+            builder.CloseElement();
+        }
+
+        builder.CloseElement();
+
+        builder.OpenElement(46, "div");
+        builder.AddAttribute(47, "class", "dashboard-donut-center");
+        builder.OpenElement(48, "span");
+        builder.AddAttribute(49, "class", $"dashboard-donut-value {(formatCurrency ? "is-currency" : string.Empty)}");
+        builder.AddContent(50, FormatDonutCenterValue(total, formatCurrency));
+        builder.CloseElement();
+        builder.OpenElement(51, "span");
+        builder.AddAttribute(52, "class", "dashboard-donut-label");
+        builder.AddContent(53, centerLabel);
+        builder.CloseElement();
+        builder.CloseElement();
+
+        builder.CloseElement();
+
+        builder.OpenElement(60, "div");
+        builder.AddAttribute(61, "class", "dashboard-legend");
+        var index = 0;
+        foreach (var slice in slices)
+        {
+            builder.OpenElement(62 + index, "div");
+            builder.AddAttribute(63 + index, "class", $"dashboard-legend-item {(string.Equals(selectedKey, slice.Key, StringComparison.OrdinalIgnoreCase) ? "is-selected" : string.Empty)}");
+            builder.AddAttribute(64 + index, "title", BuildDonutMetricText(slice.Label, slice.Value, slice.Percent, formatCurrency));
+
+            builder.OpenElement(65 + index, "span");
+            builder.AddAttribute(66 + index, "class", "dashboard-legend-swatch");
+            builder.AddAttribute(67 + index, "style", $"background:{slice.Color}");
+            builder.CloseElement();
+
+            builder.OpenElement(68 + index, "span");
+            builder.AddAttribute(69 + index, "class", "dashboard-legend-text");
+            builder.AddContent(70 + index, slice.Label);
+            builder.CloseElement();
+
+            builder.OpenElement(71 + index, "span");
+            builder.AddAttribute(72 + index, "class", "dashboard-legend-metric");
+            builder.AddContent(73 + index, $"{FormatDonutValue(slice.Value, formatCurrency)} ({slice.Percent:N1}%)");
+            builder.CloseElement();
+
+            builder.CloseElement();
+            index += 20;
+        }
+        builder.CloseElement();
+
+        builder.CloseElement();
+    };
+
+    private static IReadOnlyList<DonutSlice> BuildDonutSlices(IReadOnlyList<ChartSegment> segments)
+    {
+        const double center = 110d;
+        const double outerRadius = 84d;
+        const double innerRadius = 56d;
+        var total = segments.Sum(segment => segment.Value);
+        if (total <= 0)
+        {
+            return Array.Empty<DonutSlice>();
+        }
+
+        var startAngle = -90d;
+        var slices = new List<DonutSlice>(segments.Count);
+        for (var index = 0; index < segments.Count; index++)
+        {
+            var segment = segments[index];
+            var percent = segment.Value / total * 100m;
+            var sweepAngle = index == segments.Count - 1
+                ? 360d - (startAngle + 90d)
+                : (double)(segment.Value / total * 360m);
+            if (segments.Count == 1)
+            {
+                sweepAngle = 359.999d;
+            }
+
+            var endAngle = startAngle + sweepAngle;
+
+            slices.Add(new DonutSlice(
+                segment.Key,
+                segment.Label,
+                segment.Value,
+                segment.Color,
+                percent,
+                DescribeDonutSlice(center, center, outerRadius, innerRadius, startAngle, endAngle)));
+
+            startAngle = endAngle;
+        }
+
+        return slices;
+    }
+
+    private static string DescribeDonutSlice(
+        double centerX,
+        double centerY,
+        double outerRadius,
+        double innerRadius,
+        double startAngle,
+        double endAngle)
+    {
+        var outerStart = DescribePoint(centerX, centerY, outerRadius, endAngle);
+        var outerEnd = DescribePoint(centerX, centerY, outerRadius, startAngle);
+        var innerStart = DescribePoint(centerX, centerY, innerRadius, endAngle);
+        var innerEnd = DescribePoint(centerX, centerY, innerRadius, startAngle);
+        var largeArcFlag = endAngle - startAngle <= 180d ? "0" : "1";
+
+        return string.Create(CultureInfo.InvariantCulture, $"M {outerStart.X:0.###} {outerStart.Y:0.###} " +
+            $"A {outerRadius:0.###} {outerRadius:0.###} 0 {largeArcFlag} 0 {outerEnd.X:0.###} {outerEnd.Y:0.###} " +
+            $"L {innerEnd.X:0.###} {innerEnd.Y:0.###} " +
+            $"A {innerRadius:0.###} {innerRadius:0.###} 0 {largeArcFlag} 1 {innerStart.X:0.###} {innerStart.Y:0.###} Z");
+    }
+
+    private static (double X, double Y) DescribePoint(double centerX, double centerY, double radius, double angleInDegrees)
+    {
+        var angleInRadians = Math.PI / 180d * angleInDegrees;
+        return (
+            centerX + radius * Math.Cos(angleInRadians),
+            centerY + radius * Math.Sin(angleInRadians));
+    }
+
+    private static string BuildLinePath(IReadOnlyList<LinePoint> points, LineChartModel chart)
+    {
+        if (points.Count == 0)
+        {
+            return string.Empty;
+        }
+
+        var path = new List<string>();
+        for (var index = 0; index < points.Count; index++)
+        {
+            var point = points[index];
+            var x = GetLineX(point.Position, chart).ToString("0.##", CultureInfo.InvariantCulture);
+            var y = GetLineY(point.Value, chart).ToString("0.##", CultureInfo.InvariantCulture);
+            path.Add(index == 0 ? $"M {x} {y}" : $"L {x} {y}");
+        }
+
+        return string.Join(" ", path);
+    }
+
+    private static decimal GetLineX(decimal position, LineChartModel chart)
+    {
+        const decimal left = 64m;
+        const decimal width = 660m;
+        return left + (position / chart.MaxX) * width;
+    }
+
+    private static decimal GetLineY(decimal value, LineChartModel chart)
+    {
+        const decimal top = 20m;
+        const decimal height = 200m;
+        if (chart.MaxY <= 0)
+        {
+            return top + height;
+        }
+
+        return top + height - (value / chart.MaxY) * height;
+    }
+
+    private static string FormatDonutValue(decimal value, bool formatCurrency)
+    {
+        return formatCurrency
+            ? value.ToString("C0", CultureInfo.GetCultureInfo("en-US"))
+            : value.ToString("N0", CultureInfo.InvariantCulture);
+    }
+
+    private static string FormatDonutCenterValue(decimal value, bool formatCurrency)
+    {
+        if (!formatCurrency)
+        {
+            return FormatDonutValue(value, false);
+        }
+
+        var absoluteValue = Math.Abs(value);
+        return absoluteValue switch
+        {
+            >= 1_000_000_000_000m => $"{(value / 1_000_000_000_000m):C1}T",
+            >= 1_000_000_000m => $"{(value / 1_000_000_000m):C1}B",
+            >= 1_000_000m => $"{(value / 1_000_000m):C1}M",
+            >= 1_000m => $"{(value / 1_000m):C1}K",
+            _ => value.ToString("C0", CultureInfo.GetCultureInfo("en-US"))
+        };
+    }
+
+    private static string BuildDonutMetricText(string label, decimal value, decimal percent, bool formatCurrency)
+    {
+        return $"{label}: {FormatDonutValue(value, formatCurrency)} ({percent:N1}%)";
+    }
+
+    private static string GetSideColor(string sideKey)
+    {
+        return sideKey.ToUpperInvariant() switch
+        {
+            "BUY" => "#0f4c5c",
+            "SELL" => "#d9783a",
+            "BUY_MINUS" => "#1d4ed8",
+            "SELL_PLUS" => "#9a3412",
+            "SELL_SHORT" => "#7c3aed",
+            "SELL_SHORT_EXEMPT" => "#8b5cf6",
+            "UNDISCLOSED" => "#64748b",
+            "CROSS" => "#0f766e",
+            "CROSS_SHORT" => "#be123c",
+            _ => "#94a3b8"
+        };
+    }
+
+    private sealed record RangeOption(string Key, string Label);
+
+    private sealed record ChartSegment(string Key, string Label, decimal Value, string Color);
+    private sealed record DonutSlice(
+        string Key,
+        string Label,
+        decimal Value,
+        string Color,
+        decimal Percent,
+        string PathData);
+
+    private sealed record BarDatum(string Key, string Label, decimal Value, string Color);
+
+    private sealed record LinePoint(decimal Position, string Label, decimal Value);
+
+    private sealed record AxisTick(decimal Position, string Label);
+
+    private sealed record LineChartModel(
+        IReadOnlyList<LinePoint> Points,
+        IReadOnlyList<AxisTick> XTicks,
+        IReadOnlyList<AxisTick> YTicks,
+        decimal MaxX,
+        decimal MaxY);
+
+    private enum TimeBucketMode
+    {
+        Hour,
+        Weekday,
+        DateRange,
+        DayOfMonth
+    }
+}

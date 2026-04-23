@@ -45,7 +45,7 @@ builder.Services.AddSingleton(sp =>
     var fixConfig = configuration.GetSection("Fix").Get<FixConfig>() ?? new FixConfig();
     if (string.IsNullOrWhiteSpace(fixConfig.SessionQualifier))
     {
-        fixConfig.SessionQualifier = configuration["FixSessionQualifiers:Web"] ?? "FixFlowWeb";
+        fixConfig.SessionQualifier = configuration["FixSessionQualifiers:Web"] ?? "FIXFLOWWEB";
     }
 
     return fixConfig;
