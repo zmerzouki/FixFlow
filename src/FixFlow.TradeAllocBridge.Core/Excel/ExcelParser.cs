@@ -14,7 +14,7 @@ public class TradeRecord
     public Dictionary<string, string> Fields { get; set; } = new(StringComparer.OrdinalIgnoreCase);
 }
 
-public class ExcelParser
+public class ExcelParser : ITradeFileParser
 {
     private readonly ILogger<ExcelParser>? _logger;
 

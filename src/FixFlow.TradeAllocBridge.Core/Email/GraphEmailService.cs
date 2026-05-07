@@ -1,9 +1,9 @@
-﻿using Azure.Identity;
+using Azure.Identity;
+using FixFlow.TradeAllocBridge.Core.Config;
+using FixFlow.TradeAllocBridge.Core.Mapping;
 using Microsoft.Extensions.Logging;
 using Microsoft.Graph;
 using Microsoft.Graph.Models;
-using FixFlow.TradeAllocBridge.Core.Config;
-using FixFlow.TradeAllocBridge.Core.Mapping;
 using System.Text.RegularExpressions;
 
 namespace FixFlow.TradeAllocBridge.Core.Email;
@@ -12,40 +12,23 @@ namespace FixFlow.TradeAllocBridge.Core.Email;
 /// Retrieves allocation emails and Excel attachments from Microsoft 365 using Graph API.
 /// Resolves client mapping dynamically by sender’s DNS domain.
 /// </summary>
-public class GraphEmailService
+public class GraphEmailService : IAllocationEmailService
 {
     private readonly EmailConfig _config;
     private readonly ILogger<GraphEmailService> _logger;
-    private readonly GraphServiceClient _client;
+    private readonly IGraphMailboxClient _mailboxClient;
     private readonly FixMappingRepository _mappingRepo;
 
-    public GraphEmailService(EmailConfig config, ILogger<GraphEmailService> logger)
+    public GraphEmailService(
+        EmailConfig config,
+        ILogger<GraphEmailService> logger,
+        FixMappingRepository? mappingRepo = null,
+        IGraphMailboxClient? mailboxClient = null)
     {
         _config = config;
         _logger = logger;
-
-        var credential = new ClientSecretCredential(_config.TenantId, _config.ClientId, _config.ClientSecret);
-        _client = new GraphServiceClient(credential, new[] { "https://graph.microsoft.com/.default" });
-
-        // ✅ Dynamically resolve configs directory (supports running from CLI, bin/, or root)
-        string configDir;
-
-        var probePaths = new[]
-        {
-            Path.Combine(AppContext.BaseDirectory, "configs"),
-            Path.Combine(Directory.GetCurrentDirectory(), "configs"),
-            Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "configs")),
-            Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "configs"))
-        };
-
-        configDir = probePaths.FirstOrDefault(Directory.Exists)
-                    ?? Path.Combine(AppContext.BaseDirectory, "configs");
-
-        Directory.CreateDirectory(configDir);
-
-        _mappingRepo = new FixMappingRepository(configDir);
-        _logger.LogInformation("📁 Mapping repository initialized at {Path}", configDir);
-
+        _mailboxClient = mailboxClient ?? new GraphMailboxClient(config);
+        _mappingRepo = mappingRepo ?? CreateMappingRepository(logger);
     }
 
     /// <summary>
@@ -58,20 +41,9 @@ public class GraphEmailService
 
         try
         {
-            var inbox = await _client.Users[_config.MailboxAddress]
-                .MailFolders["Inbox"]
-                .Messages
-                .GetAsync(options =>
-                {
-                    options.QueryParameters.Filter = "isRead eq false";
-                    options.QueryParameters.Top = 20;
-                    options.QueryParameters.Select = new[]
-                    {
-                        "id", "subject", "hasAttachments", "receivedDateTime", "from"
-                    };
-                });
+            var inbox = await _mailboxClient.GetUnreadMessagesAsync(_config.MailboxAddress);
 
-            if (inbox?.Value == null || inbox.Value.Count == 0)
+            if (inbox == null || inbox.Count == 0)
             {
                 _logger.LogInformation("No unread allocation emails found in mailbox {Mailbox}.", _config.MailboxAddress);
                 return result;
@@ -79,14 +51,13 @@ public class GraphEmailService
 
             Directory.CreateDirectory(_config.DownloadPath ?? "attachments");
 
-            foreach (var msg in inbox.Value)
+            foreach (var msg in inbox)
             {
                 try
                 {
-                    var senderEmail = msg.From?.EmailAddress?.Address ?? string.Empty;
+                    var senderEmail = msg.SenderEmail ?? string.Empty;
                     var senderDomain = ExtractDomain(senderEmail);
 
-                    // ✅ Resolve FIX mapping dynamically by sender’s domain
                     var mapping = _mappingRepo.GetAll()
                         .FirstOrDefault(m =>
                             !string.IsNullOrWhiteSpace(m.SenderDomain) &&
@@ -102,25 +73,17 @@ public class GraphEmailService
                     _logger.LogInformation("📧 Matched sender domain '{Domain}' to client mapping '{ClientId}'.",
                         senderDomain, mapping.ClientId);
 
-                    //var allocEmail = new AllocationEmail
-                    //{
-                    //    Subject = msg.Subject ?? "(No Subject)",
-                    //    Attachments = new List<string>(),
-                    //    SenderDomain = senderDomain,
-                    //    SenderEmail = senderEmail,
-                    //    ClientId = mapping.ClientId,
-                    //    Mapping = mapping
-                    //};
                     var mapFileName = $"{mapping.ClientId}_map.json";
                     var mapPath = Path.Combine(_mappingRepo.BaseDirectory, mapFileName);
 
-                    // fallback if the file is not in the runtime bin folder
                     if (!File.Exists(mapPath))
                     {
                         var fallbackPath = Path.GetFullPath(
                             Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "configs", mapFileName));
                         if (File.Exists(fallbackPath))
+                        {
                             mapPath = fallbackPath;
+                        }
                     }
 
                     var allocEmail = new AllocationEmail
@@ -134,29 +97,21 @@ public class GraphEmailService
                         MapPath = mapPath
                     };
 
-                    if (msg.HasAttachments == true)
+                    if (msg.HasAttachments)
                     {
-                        var attachments = await _client.Users[_config.MailboxAddress]
-                            .Messages[msg.Id]
-                            .Attachments
-                            .GetAsync();
-
-                        if (attachments?.Value != null)
+                        var attachments = await _mailboxClient.GetAttachmentsAsync(_config.MailboxAddress, msg.Id);
+                        foreach (var att in attachments)
                         {
-                            foreach (var att in attachments.Value)
+                            if (!string.IsNullOrWhiteSpace(att.Name) &&
+                                (att.Name.EndsWith(".xlsx", StringComparison.OrdinalIgnoreCase) ||
+                                 att.Name.EndsWith(".xls", StringComparison.OrdinalIgnoreCase) ||
+                                 att.Name.EndsWith(".csv", StringComparison.OrdinalIgnoreCase)))
                             {
-                                if (att is FileAttachment fileAttachment &&
-                                    fileAttachment.Name != null &&
-                                    (fileAttachment.Name.EndsWith(".xlsx", StringComparison.OrdinalIgnoreCase) ||
-                                     fileAttachment.Name.EndsWith(".xls", StringComparison.OrdinalIgnoreCase) ||
-                                     fileAttachment.Name.EndsWith(".csv", StringComparison.OrdinalIgnoreCase)))
-                                {
-                                    var safeFileName = Path.GetFileName(fileAttachment.Name);
-                                    var savePath = Path.Combine(_config.DownloadPath ?? "attachments", safeFileName);
+                                var safeFileName = Path.GetFileName(att.Name);
+                                var savePath = Path.Combine(_config.DownloadPath ?? "attachments", safeFileName);
 
-                                    await File.WriteAllBytesAsync(savePath, fileAttachment.ContentBytes ?? Array.Empty<byte>());
-                                    allocEmail.Attachments.Add(savePath);
-                                }
+                                await File.WriteAllBytesAsync(savePath, att.ContentBytes ?? Array.Empty<byte>());
+                                allocEmail.Attachments.Add(savePath);
                             }
                         }
                     }
@@ -165,10 +120,7 @@ public class GraphEmailService
                     _logger.LogInformation("✅ Fetched email '{Subject}' with {Count} attachment(s) for client '{ClientId}'.",
                         allocEmail.Subject, allocEmail.Attachments.Count, mapping.ClientId);
 
-                    // Mark message as read
-                    await _client.Users[_config.MailboxAddress]
-                        .Messages[msg.Id]
-                        .PatchAsync(new Microsoft.Graph.Models.Message { IsRead = true });
+                    await _mailboxClient.MarkAsReadAsync(_config.MailboxAddress, msg.Id);
                 }
                 catch (Exception exMsg)
                 {
@@ -191,6 +143,85 @@ public class GraphEmailService
         return match.Success ? match.Groups[1].Value.Trim().ToLowerInvariant() : string.Empty;
     }
 
+    private static FixMappingRepository CreateMappingRepository(ILogger<GraphEmailService> logger)
+    {
+        var configDir = ResolveConfigDirectory();
+        logger.LogInformation("📁 Mapping repository initialized at {Path}", configDir);
+        return new FixMappingRepository(configDir);
+    }
+
+    private static string ResolveConfigDirectory()
+    {
+        var probePaths = new[]
+        {
+            Path.Combine(AppContext.BaseDirectory, "configs"),
+            Path.Combine(Directory.GetCurrentDirectory(), "configs"),
+            Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "configs")),
+            Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "configs"))
+        };
+
+        var configDir = probePaths.FirstOrDefault(Directory.Exists)
+                        ?? Path.Combine(AppContext.BaseDirectory, "configs");
+
+        Directory.CreateDirectory(configDir);
+        return configDir;
+    }
+}
+
+internal sealed class GraphMailboxClient : IGraphMailboxClient
+{
+    private readonly GraphServiceClient _client;
+
+    public GraphMailboxClient(EmailConfig config)
+    {
+        var credential = new ClientSecretCredential(config.TenantId, config.ClientId, config.ClientSecret);
+        _client = new GraphServiceClient(credential, new[] { "https://graph.microsoft.com/.default" });
+    }
+
+    public async Task<IReadOnlyList<GraphMailboxMessage>> GetUnreadMessagesAsync(string mailboxAddress, CancellationToken cancellationToken = default)
+    {
+        var inbox = await _client.Users[mailboxAddress]
+            .MailFolders["Inbox"]
+            .Messages
+            .GetAsync(options =>
+            {
+                options.QueryParameters.Filter = "isRead eq false";
+                options.QueryParameters.Top = 20;
+                options.QueryParameters.Select = new[]
+                {
+                    "id", "subject", "hasAttachments", "receivedDateTime", "from"
+                };
+            }, cancellationToken);
+
+        return inbox?.Value?.Select(message => new GraphMailboxMessage(
+            message.Id ?? string.Empty,
+            message.Subject ?? "(No Subject)",
+            message.HasAttachments == true,
+            message.From?.EmailAddress?.Address ?? string.Empty))
+            .ToList()
+            ?? new List<GraphMailboxMessage>();
+    }
+
+    public async Task<IReadOnlyList<GraphMailboxAttachment>> GetAttachmentsAsync(string mailboxAddress, string messageId, CancellationToken cancellationToken = default)
+    {
+        var attachments = await _client.Users[mailboxAddress]
+            .Messages[messageId]
+            .Attachments
+            .GetAsync(cancellationToken: cancellationToken);
+
+        return attachments?.Value?
+            .OfType<FileAttachment>()
+            .Select(att => new GraphMailboxAttachment(att.Name ?? string.Empty, att.ContentBytes ?? Array.Empty<byte>()))
+            .ToList()
+            ?? new List<GraphMailboxAttachment>();
+    }
+
+    public async Task MarkAsReadAsync(string mailboxAddress, string messageId, CancellationToken cancellationToken = default)
+    {
+        await _client.Users[mailboxAddress]
+            .Messages[messageId]
+            .PatchAsync(new Message { IsRead = true }, cancellationToken: cancellationToken);
+    }
 }
 
 /// <summary>

@@ -121,11 +121,11 @@ namespace FixFlow.TradeAllocBridge.CLI
             builder.Services.AddSingleton(config.Fix);
             builder.Services.AddSingleton(config.Logging);
 
-            builder.Services.AddSingleton<GraphEmailService>();
-            builder.Services.AddSingleton<ExcelParser>();
+            builder.Services.AddSingleton<IAllocationEmailService, GraphEmailService>();
+            builder.Services.AddSingleton<ITradeFileParser, ExcelParser>();
             builder.Services.AddSingleton<FixApp>();
-            builder.Services.AddSingleton<FixEngine>();
-            builder.Services.AddSingleton<FixClient>();
+            builder.Services.AddSingleton<IFixSessionEngine, FixEngine>();
+            builder.Services.AddSingleton<IFixMessageClient, FixClient>();
             builder.Services.AddSingleton<ValidationReport>();
 
             // Prepare canonical paths used by the service runtime.
@@ -218,13 +218,16 @@ namespace FixFlow.TradeAllocBridge.CLI
         public static async Task ProcessOnceAsync(IServiceProvider services, bool dryRun, bool keepEngineRunning, CancellationToken cancellationToken)
         {
             var config = services.GetRequiredService<AppConfig>();
-            var fixEngine = services.GetRequiredService<FixEngine>();
-            var emailService = services.GetRequiredService<GraphEmailService>();
-            var excelParser = services.GetRequiredService<ExcelParser>();
-            var fixClient = services.GetRequiredService<FixClient>();
+            var fixEngine = services.GetRequiredService<IFixSessionEngine>();
+            var emailService = services.GetRequiredService<IAllocationEmailService>();
+            var excelParser = services.GetRequiredService<ITradeFileParser>();
+            var fixClient = services.GetRequiredService<IFixMessageClient>();
             var report = services.GetRequiredService<ValidationReport>();
             var fixApp = services.GetRequiredService<FixApp>();
-            fixApp.Engine = fixEngine;
+            if (fixEngine is FixEngine concreteFixEngine)
+            {
+                fixApp.Engine = concreteFixEngine;
+            }
 
             Console.WriteLine(dryRun
                 ? "Running in DRY-RUN (validation-only) mode - no messages will be sent."

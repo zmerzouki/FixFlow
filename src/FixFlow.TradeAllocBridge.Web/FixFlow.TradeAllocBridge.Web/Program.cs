@@ -38,7 +38,7 @@ builder.Services.AddScoped(sp =>
         : $"{httpContext.Request.Scheme}://{httpContext.Request.Host}/";
     return new HttpClient { BaseAddress = new Uri(baseUri) };
 });
-builder.Services.AddSingleton<ExcelParser>();
+builder.Services.AddSingleton<ITradeFileParser, ExcelParser>();
 builder.Services.AddSingleton(sp =>
 {
     var configuration = sp.GetRequiredService<IConfiguration>();
@@ -58,8 +58,8 @@ builder.Services.AddSingleton(sp =>
 });
 builder.Services.AddSingleton<ValidationReport>();
 builder.Services.AddSingleton<FixApp>();
-builder.Services.AddSingleton<FixEngine>();
-builder.Services.AddSingleton<FixClient>();
+builder.Services.AddSingleton<IFixSessionEngine, FixEngine>();
+builder.Services.AddSingleton<IFixMessageClient, FixClient>();
 builder.Services.AddScoped<DirectIngestionState>();
 builder.Services.AddScoped<MessageLogState>();
 builder.Services.AddScoped<MapManagementState>();

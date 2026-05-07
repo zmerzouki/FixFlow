@@ -221,14 +221,14 @@ public static class FixValueNormalizer
         }
 
         value = trimmed.ToUpperInvariant();
+        if (value == "CS" || (value.Contains("CROSS") && value.Contains("SHORT"))) return "9";
+        if (value.Contains("SSE") || value.Contains("EXEMPT") || value.Contains("SHORT EXEMPT")) return "6";
         if (value == "BUY" || value == "B" || value == "BOUGHT" || value.Contains("COVER")) return "1";
         if (value == "SELL" || value == "S" || value == "SOLD" || value == "LONG") return "2";
         if (value.Contains("BUY") && value.Contains("MINUS")) return "3";
         if (value.Contains("SELL") && value.Contains("PLUS")) return "4";
         if (value.Contains("SHORT")) return "5";
-        if (value.Contains("SSE") || value.Contains("EXEMPT") || value.Contains("SHORT EXEMPT")) return "6";
         if (value.Contains("CROSS")) return "8";
-        if (value == "CS" || (value.Contains("CROSS") && value.Contains("SHORT"))) return "9";
         throw new InvalidOperationException($"Side (tag 54) has an invalid value: {trimmed}");
     }
 

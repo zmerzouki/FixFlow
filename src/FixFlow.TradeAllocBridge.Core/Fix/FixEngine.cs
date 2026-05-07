@@ -9,7 +9,7 @@ using System.Text;
 
 namespace FixFlow.TradeAllocBridge.Core.Fix
 {
-    public class FixEngine : IDisposable
+    public class FixEngine : IFixSessionEngine, IDisposable
     {
         private IInitiator? _initiator;
         private readonly ILogger<FixEngine> _logger;

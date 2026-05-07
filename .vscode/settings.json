@@ -1,3 +1,6 @@
 {
-    "dotnet.defaultSolution": "RJF.TradeAllocBridge.sln"
+    "dotnet.defaultSolution": "FixFlow.TradeAllocBridge.sln"
+}
+{
+  "git.enableCommitSigning": true
 }

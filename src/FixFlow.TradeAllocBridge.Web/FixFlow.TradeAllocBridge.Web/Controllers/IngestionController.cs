@@ -24,24 +24,24 @@ public class IngestionController : ControllerBase
         @"^Unexpected non-numeric value\(s\) found for numeric FIX fields: (?<detail>.+)\.$",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
-    private readonly ExcelParser _excelParser;
+    private readonly ITradeFileParser _excelParser;
     private readonly FixConfig _fixConfig;
     private readonly FixMappingRepository _mappingRepo;
     private readonly ValidationReport _validationReport;
     private readonly FixApp _fixApp;
-    private readonly FixEngine _fixEngine;
-    private readonly FixClient _fixClient;
+    private readonly IFixSessionEngine _fixEngine;
+    private readonly IFixMessageClient _fixClient;
     private readonly ILogger<IngestionController> _logger;
     private readonly ILoggerFactory _loggerFactory;
 
     public IngestionController(
-        ExcelParser excelParser,
+        ITradeFileParser excelParser,
         FixConfig fixConfig,
         FixMappingRepository mappingRepo,
         ValidationReport validationReport,
         FixApp fixApp,
-        FixEngine fixEngine,
-        FixClient fixClient,
+        IFixSessionEngine fixEngine,
+        IFixMessageClient fixClient,
         ILoggerFactory loggerFactory,
         ILogger<IngestionController> logger)
     {

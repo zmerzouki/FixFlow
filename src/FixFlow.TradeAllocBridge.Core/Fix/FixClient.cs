@@ -6,7 +6,7 @@ using System.Threading.Tasks;
 
 namespace FixFlow.TradeAllocBridge.Core.Fix
 {
-    public class FixClient
+    public class FixClient : IFixMessageClient
     {
         private readonly ILogger<FixClient> _logger;
         private readonly FixApp _app;
