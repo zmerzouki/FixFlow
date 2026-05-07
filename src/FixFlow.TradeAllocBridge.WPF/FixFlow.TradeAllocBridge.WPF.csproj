@@ -5,6 +5,7 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <UseWPF>true</UseWPF>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
     <RootNamespace>FixFlow.TradeAllocBridge.WPF</RootNamespace>
     <AssemblyName>FixFlow.TradeAllocBridge.WPF</AssemblyName>
     <NoWarn>$(NoWarn);NU1608;NU1701</NoWarn>
