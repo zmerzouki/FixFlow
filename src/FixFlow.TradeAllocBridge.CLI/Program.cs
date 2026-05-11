@@ -71,6 +71,8 @@ namespace FixFlow.TradeAllocBridge.CLI
                 {
                     builder.Configuration.AddJsonFile(sharedSettingsPath, optional: true, reloadOnChange: true);
                 }
+                builder.Configuration.AddUserSecrets<Program>(optional: true);
+                builder.Configuration.AddEnvironmentVariables();
 
                 var config = builder.Configuration.Get<AppConfig>()!;
                 LogService.Configure(config.Logging);

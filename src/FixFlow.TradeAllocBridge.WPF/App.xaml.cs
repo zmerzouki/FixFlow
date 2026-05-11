@@ -54,6 +54,9 @@ namespace FixFlow.TradeAllocBridge.WPF
             {
                 configurationBuilder.AddJsonFile(sharedSettingsPath, optional: true, reloadOnChange: true);
             }
+            configurationBuilder
+                .AddUserSecrets<App>(optional: true)
+                .AddEnvironmentVariables();
             var configuration = configurationBuilder.Build();
 
             var appConfig = configuration.Get<AppConfig>() ?? new AppConfig(); // This now works

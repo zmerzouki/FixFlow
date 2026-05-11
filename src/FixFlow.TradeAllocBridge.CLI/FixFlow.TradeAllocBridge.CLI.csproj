@@ -5,6 +5,7 @@
     <TargetFramework>net8.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
+    <UserSecretsId>FixFlow.TradeAllocBridge.CLI</UserSecretsId>
     <RootNamespace>FixFlow.TradeAllocBridge.CLI</RootNamespace>
     <AssemblyName>FixFlow.TradeAllocBridge.CLI</AssemblyName>
     <NoWarn>$(NoWarn);NU1608;NU1701</NoWarn>
@@ -13,6 +14,7 @@
   <ItemGroup>
     <PackageReference Include="QuickFIXn.Core" Version="1.14.0" />
     <ProjectReference Include="..\FixFlow.TradeAllocBridge.Core\FixFlow.TradeAllocBridge.Core.csproj" />
+    <PackageReference Include="Microsoft.Extensions.Configuration.UserSecrets" Version="8.0.1" />
     <PackageReference Include="Microsoft.Extensions.Hosting" Version="8.0.1" />
     <PackageReference Include="Microsoft.Extensions.Hosting.WindowsServices" Version="8.0.1" />
     <PackageReference Include="Microsoft.Extensions.Hosting.Systemd" Version="8.0.1" />
